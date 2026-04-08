@@ -1,7 +1,7 @@
 {
   "name": "@paperclipai/plugin-whatsapp-gateway",
-  "version": "0.1.0",
-  "description": "WhatsApp Gateway plugin — communication backbone for Paper marketing platform. Routes questions, approvals, dashboards, and commands through WhatsApp.",
+  "version": "0.2.0",
+  "description": "WhatsApp Gateway plugin — communication backbone for Paper marketing platform. Uses Baileys (WhatsApp Web protocol) for direct WhatsApp connection via QR code scan. No Business API needed.",
   "type": "module",
   "private": true,
   "exports": {
@@ -18,10 +18,14 @@
     "typecheck": "pnpm --filter @paperclipai/plugin-sdk build && tsc --noEmit"
   },
   "dependencies": {
-    "@paperclipai/plugin-sdk": "workspace:*"
+    "@paperclipai/plugin-sdk": "workspace:*",
+    "@whiskeysockets/baileys": "^6.7.16",
+    "qrcode": "^1.5.4",
+    "pino": "^9.6.0"
   },
   "devDependencies": {
     "@types/node": "^24.6.0",
+    "@types/qrcode": "^1.5.5",
     "typescript": "^5.7.3"
   }
 }

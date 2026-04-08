@@ -1,5 +1,6 @@
 // ---------------------------------------------------------------------------
 // Approval Bridge — convert WhatsApp replies into Paperclip approval actions
+// Updated for Baileys — text-based responses instead of button clicks.
 // ---------------------------------------------------------------------------
 
 import type {
@@ -8,9 +9,6 @@ import type {
   StateKey,
 } from "../types.js";
 import type { WhatsAppClient } from "./whatsapp-client.js";
-
-const SCOPE_KIND = "plugin";
-const SCOPE_ID = "whatsapp-gateway";
 
 export class ApprovalBridge {
   private ctx: PluginContext;
@@ -21,37 +19,28 @@ export class ApprovalBridge {
     this.waClient = waClient;
   }
 
-  // ---- State helpers ------------------------------------------------------
-
   private approvalKey(approvalId: string): StateKey {
     return {
-      scopeKind: SCOPE_KIND,
-      scopeId: SCOPE_ID,
+      scopeKind: "instance",
+      namespace: "whatsapp-gateway",
       stateKey: `approval:${approvalId}`,
     };
   }
 
   private approvalIndexKey(): StateKey {
     return {
-      scopeKind: SCOPE_KIND,
-      scopeId: SCOPE_ID,
+      scopeKind: "instance",
+      namespace: "whatsapp-gateway",
       stateKey: "approval:index",
     };
   }
 
-  // ---- CRUD ---------------------------------------------------------------
-
-  /** Store a new pending approval. */
   async createApproval(approval: PendingApproval): Promise<void> {
-    await this.ctx.state.set(
-      this.approvalKey(approval.approvalId),
-      JSON.stringify(approval),
-    );
+    await this.ctx.state.set(this.approvalKey(approval.approvalId), approval);
 
-    // Maintain an index of pending approval IDs
     const index = await this.getApprovalIndex();
     index.push(approval.approvalId);
-    await this.ctx.state.set(this.approvalIndexKey(), JSON.stringify(index));
+    await this.ctx.state.set(this.approvalIndexKey(), index);
 
     this.ctx.logger.info("Approval created", {
       approvalId: approval.approvalId,
@@ -60,7 +49,6 @@ export class ApprovalBridge {
     });
   }
 
-  /** Get a pending approval by ID. */
   async getApproval(approvalId: string): Promise<PendingApproval | null> {
     const raw = await this.ctx.state.get(this.approvalKey(approvalId));
     if (!raw) return null;
@@ -72,15 +60,10 @@ export class ApprovalBridge {
     }
   }
 
-  /** Update an existing approval. */
   async updateApproval(approval: PendingApproval): Promise<void> {
-    await this.ctx.state.set(
-      this.approvalKey(approval.approvalId),
-      JSON.stringify(approval),
-    );
+    await this.ctx.state.set(this.approvalKey(approval.approvalId), approval);
   }
 
-  /** Get the list of all pending approval IDs. */
   private async getApprovalIndex(): Promise<string[]> {
     const raw = await this.ctx.state.get(this.approvalIndexKey());
     if (!raw) return [];
@@ -91,9 +74,6 @@ export class ApprovalBridge {
     }
   }
 
-  // ---- Button response handling -------------------------------------------
-
-  /** Handle an approval button click (approve, reject, question). */
   async handleButtonResponse(
     approvalId: string,
     action: "approve" | "reject" | "question",
@@ -101,16 +81,13 @@ export class ApprovalBridge {
   ): Promise<{ success: boolean; message: string }> {
     const approval = await this.getApproval(approvalId);
     if (!approval) {
-      this.ctx.logger.warn("Approval not found for button response", { approvalId });
+      this.ctx.logger.warn("Approval not found for response", { approvalId });
       await this.waClient.sendText(from, "Sorry, I couldn't find that approval request. It may have expired.");
       return { success: false, message: "Approval not found" };
     }
 
-    if (approval.status !== "pending") {
-      await this.waClient.sendText(
-        from,
-        `This approval was already ${approval.status}. No action taken.`,
-      );
+    if (approval.status !== "pending" && approval.status !== "question") {
+      await this.waClient.sendText(from, `This approval was already ${approval.status}. No action taken.`);
       return { success: false, message: `Already ${approval.status}` };
     }
 
@@ -118,20 +95,7 @@ export class ApprovalBridge {
       case "approve": {
         approval.status = "approved";
         await this.updateApproval(approval);
-
-        await this.ctx.events.emit("approval.resolved", {
-          approvalId: approval.approvalId,
-          taskId: approval.taskId,
-          agentId: approval.agentId,
-          status: "approved",
-          resolvedBy: from,
-        });
-
-        await this.waClient.sendText(
-          from,
-          `Approved: ${approval.title}\nThe agent has been notified and will proceed.`,
-        );
-
+        await this.waClient.sendText(from, `Approved: ${approval.title}\nThe agent has been notified and will proceed.`);
         this.ctx.logger.info("Approval approved", { approvalId, taskId: approval.taskId });
         return { success: true, message: "Approved" };
       }
@@ -139,20 +103,7 @@ export class ApprovalBridge {
       case "reject": {
         approval.status = "rejected";
         await this.updateApproval(approval);
-
-        await this.ctx.events.emit("approval.resolved", {
-          approvalId: approval.approvalId,
-          taskId: approval.taskId,
-          agentId: approval.agentId,
-          status: "rejected",
-          resolvedBy: from,
-        });
-
-        await this.waClient.sendText(
-          from,
-          `Rejected: ${approval.title}\nThe agent has been notified.`,
-        );
-
+        await this.waClient.sendText(from, `Rejected: ${approval.title}\nThe agent has been notified.`);
         this.ctx.logger.info("Approval rejected", { approvalId, taskId: approval.taskId });
         return { success: true, message: "Rejected" };
       }
@@ -160,12 +111,7 @@ export class ApprovalBridge {
       case "question": {
         approval.status = "question";
         await this.updateApproval(approval);
-
-        await this.waClient.sendText(
-          from,
-          `Please type your question about: ${approval.title}\nI'll forward it to the agent.`,
-        );
-
+        await this.waClient.sendText(from, `Please type your question about: ${approval.title}\nI'll forward it to the agent.`);
         this.ctx.logger.info("Approval question requested", { approvalId });
         return { success: true, message: "Awaiting question text" };
       }
@@ -175,7 +121,6 @@ export class ApprovalBridge {
     }
   }
 
-  /** Handle a text follow-up to an approval (the chairman typed a question). */
   async handleTextFollowUp(
     approvalId: string,
     text: string,
@@ -188,17 +133,8 @@ export class ApprovalBridge {
     }
 
     approval.responseText = text;
-    // Reset status back to pending — agent needs to address the question and re-submit
     approval.status = "pending";
     await this.updateApproval(approval);
-
-    await this.ctx.events.emit("approval.question", {
-      approvalId: approval.approvalId,
-      taskId: approval.taskId,
-      agentId: approval.agentId,
-      question: text,
-      from,
-    });
 
     await this.waClient.sendText(
       from,

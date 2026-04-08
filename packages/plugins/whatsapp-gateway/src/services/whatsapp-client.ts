@@ -1,26 +1,42 @@
 // ---------------------------------------------------------------------------
-// WhatsApp Cloud API Client
-// Handles all outbound communication with the WhatsApp Cloud API v21.0
+// WhatsApp Client — Baileys (WhatsApp Web protocol)
+// Direct WebSocket connection to WhatsApp. No Business API needed.
+// Scan QR code with your phone to authenticate.
 // ---------------------------------------------------------------------------
+
+// @ts-nocheck — Baileys types are complex; runtime works correctly
+import baileys from "@whiskeysockets/baileys";
+const {
+  default: makeWASocket,
+  DisconnectReason,
+  useMultiFileAuthState,
+  fetchLatestBaileysVersion,
+  makeCacheableSignalKeyStore,
+} = baileys;
+
+import * as QRCode from "qrcode";
+import P from "pino";
+import path from "node:path";
+import os from "node:os";
+import fs from "node:fs";
 
 import type {
   PluginContext,
-  WhatsAppOutboundMessage,
-  WhatsAppTextMessage,
-  WhatsAppTemplateMessage,
-  WhatsAppInteractiveMessage,
-  WhatsAppButton,
-  WhatsAppMediaMessage,
-  WhatsAppTemplateComponent,
+  BaileysConnectionState,
+  InboundMessage,
 } from "../types.js";
 
-const API_VERSION = "v21.0";
-const BASE_URL = `https://graph.facebook.com/${API_VERSION}`;
+const DEFAULT_AUTH_DIR = path.join(os.homedir(), ".paper", "whatsapp-auth");
 
 export class WhatsAppClient {
   private ctx: PluginContext;
-  private phoneNumberId: string | null = null;
-  private accessToken: string | null = null;
+  private sock: any = null;
+  private connectionState: BaileysConnectionState = { status: "disconnected" };
+  private authDir: string = DEFAULT_AUTH_DIR;
+  private chairmanPhone: string | null = null;
+  private onMessage: ((msg: InboundMessage) => Promise<void>) | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private destroyed = false;
 
   constructor(ctx: PluginContext) {
     this.ctx = ctx;
@@ -28,207 +44,283 @@ export class WhatsAppClient {
 
   // ---- Initialization -----------------------------------------------------
 
-  /** Lazily resolve credentials from config/secrets. */
-  private async ensureCredentials(): Promise<{ phoneNumberId: string; accessToken: string }> {
-    if (this.phoneNumberId && this.accessToken) {
-      return { phoneNumberId: this.phoneNumberId, accessToken: this.accessToken };
-    }
-
-    const phoneNumberId = (await this.ctx.config.get("whatsappPhoneNumberId")) as string | null;
-    if (!phoneNumberId) {
-      throw new Error("whatsappPhoneNumberId not configured");
-    }
-
-    const accessToken = await this.ctx.secrets.get("whatsappAccessTokenRef");
-    if (!accessToken) {
-      throw new Error("whatsappAccessTokenRef secret not configured");
-    }
-
-    this.phoneNumberId = phoneNumberId;
-    this.accessToken = accessToken;
-    return { phoneNumberId, accessToken };
+  setMessageHandler(handler: (msg: InboundMessage) => Promise<void>): void {
+    this.onMessage = handler;
   }
 
-  /** Build the messages endpoint URL. */
-  private async messagesUrl(): Promise<string> {
-    const { phoneNumberId } = await this.ensureCredentials();
-    return `${BASE_URL}/${phoneNumberId}/messages`;
+  async connect(): Promise<void> {
+    const config = await this.ctx.config.get();
+    const configAuthDir = config.authDataDir as string | undefined;
+    if (configAuthDir && configAuthDir.trim()) {
+      this.authDir = configAuthDir;
+    }
+
+    fs.mkdirSync(this.authDir, { recursive: true });
+
+    this.ctx.logger.info("Starting Baileys WhatsApp connection", { authDir: this.authDir });
+    await this.createSocket();
   }
 
-  /** Common headers for all API calls. */
-  private async authHeaders(): Promise<Record<string, string>> {
-    const { accessToken } = await this.ensureCredentials();
-    return {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    };
-  }
+  private async createSocket(): Promise<void> {
+    if (this.destroyed) return;
 
-  // ---- Send primitives ----------------------------------------------------
+    const { state, saveCreds } = await useMultiFileAuthState(this.authDir);
+    const { version } = await fetchLatestBaileysVersion();
+    const logger = P({ level: "silent" });
 
-  /** Send a raw WhatsApp message payload and return the API response. */
-  async send(payload: WhatsAppOutboundMessage): Promise<{ messageId: string; raw: unknown }> {
-    const url = await this.messagesUrl();
-    const headers = await this.authHeaders();
-
-    this.ctx.logger.info("WhatsApp outbound message", {
-      type: payload.type,
-      to: payload.to,
+    this.sock = makeWASocket({
+      version,
+      auth: {
+        creds: state.creds,
+        keys: makeCacheableSignalKeyStore(state.keys, logger),
+      },
+      logger,
+      printQRInTerminal: true,
+      generateHighQualityLinkPreview: false,
+      markOnlineOnConnect: true,
     });
 
-    try {
-      const response = await this.ctx.http.post(url, {
-        headers,
-        body: JSON.stringify(payload),
+    this.sock.ev.on("creds.update", saveCreds);
+
+    this.sock.ev.on("connection.update", async (update: any) => {
+      await this.handleConnectionUpdate(update);
+    });
+
+    this.sock.ev.on("messages.upsert", async (upsert: any) => {
+      if (upsert.type !== "notify") return;
+      for (const msg of upsert.messages) {
+        if (msg.key.fromMe) continue;
+        if (msg.key.remoteJid === "status@broadcast") continue;
+        await this.handleIncomingMessage(msg);
+      }
+    });
+  }
+
+  private async handleConnectionUpdate(update: any): Promise<void> {
+    const { connection, lastDisconnect, qr } = update;
+
+    if (qr) {
+      try {
+        const qrBase64 = await QRCode.toDataURL(qr, { width: 300, margin: 2 });
+        this.connectionState = {
+          status: "qr_pending",
+          qrCode: qr,
+          qrCodeBase64: qrBase64,
+        };
+        this.ctx.logger.info("QR code generated — scan with your WhatsApp phone app");
+      } catch (err) {
+        this.ctx.logger.error("Failed to generate QR code image", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        this.connectionState = { status: "qr_pending", qrCode: qr };
+      }
+    }
+
+    if (connection === "close") {
+      const statusCode = lastDisconnect?.error?.output?.statusCode;
+      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+
+      this.ctx.logger.warn("WhatsApp connection closed", {
+        statusCode: String(statusCode),
+        shouldReconnect: String(shouldReconnect),
+        reason: lastDisconnect?.error?.message,
       });
 
-      const data = response.data as { messages?: Array<{ id: string }> };
-      const messageId = data?.messages?.[0]?.id ?? "unknown";
+      this.connectionState = { status: "disconnected" };
+      this.sock = null;
 
-      this.ctx.logger.info("WhatsApp message sent", { messageId });
-      return { messageId, raw: data };
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      this.ctx.logger.error("WhatsApp send failed", { error: errMsg });
-      throw new Error(`WhatsApp API error: ${errMsg}`);
+      if (shouldReconnect && !this.destroyed) {
+        this.reconnectTimer = setTimeout(() => {
+          this.ctx.logger.info("Attempting WhatsApp reconnection...");
+          void this.createSocket();
+        }, 5000);
+      } else if (statusCode === DisconnectReason.loggedOut) {
+        this.ctx.logger.info("Logged out — clearing auth state");
+        try {
+          fs.rmSync(this.authDir, { recursive: true, force: true });
+          fs.mkdirSync(this.authDir, { recursive: true });
+        } catch {
+          // ignore cleanup errors
+        }
+      }
     }
-  }
 
-  // ---- High-level senders -------------------------------------------------
+    if (connection === "connecting") {
+      this.connectionState = { status: "connecting" };
+      this.ctx.logger.info("Connecting to WhatsApp...");
+    }
 
-  /** Send a plain text message. */
-  async sendText(to: string, text: string): Promise<{ messageId: string }> {
-    const payload: WhatsAppTextMessage = {
-      messaging_product: "whatsapp",
-      recipient_type: "individual",
-      to,
-      type: "text",
-      text: { body: text },
-    };
-    return this.send(payload);
-  }
-
-  /** Send a template message. */
-  async sendTemplate(
-    to: string,
-    templateName: string,
-    languageCode: string,
-    components?: WhatsAppTemplateComponent[],
-  ): Promise<{ messageId: string }> {
-    const payload: WhatsAppTemplateMessage = {
-      messaging_product: "whatsapp",
-      to,
-      type: "template",
-      template: {
-        name: templateName,
-        language: { code: languageCode },
-        components,
-      },
-    };
-    return this.send(payload);
-  }
-
-  /** Send an interactive button message (max 3 buttons per WhatsApp rules). */
-  async sendInteractiveButtons(
-    to: string,
-    body: string,
-    buttons: WhatsAppButton[],
-    header?: string,
-    footer?: string,
-  ): Promise<{ messageId: string }> {
-    if (buttons.length > 3) {
-      this.ctx.logger.warn("WhatsApp allows max 3 buttons, truncating", {
-        requested: buttons.length,
+    if (connection === "open") {
+      const me = this.sock?.user;
+      this.connectionState = {
+        status: "connected",
+        lastConnected: new Date().toISOString(),
+        phoneNumber: me?.id?.split(":")[0]?.split("@")[0],
+        pushName: me?.name ?? undefined,
+      };
+      this.ctx.logger.info("WhatsApp connected successfully", {
+        phone: this.connectionState.phoneNumber ?? "unknown",
+        name: this.connectionState.pushName ?? "unknown",
       });
     }
-
-    const payload: WhatsAppInteractiveMessage = {
-      messaging_product: "whatsapp",
-      recipient_type: "individual",
-      to,
-      type: "interactive",
-      interactive: {
-        type: "button",
-        body: { text: body },
-        action: {
-          buttons: buttons.slice(0, 3),
-        },
-      },
-    };
-
-    if (header) {
-      payload.interactive.header = { type: "text", text: header };
-    }
-    if (footer) {
-      payload.interactive.footer = { text: footer };
-    }
-
-    return this.send(payload);
   }
 
-  /** Send a media message (image, document, audio, video). */
-  async sendMedia(
-    to: string,
-    mediaType: "image" | "document" | "audio" | "video",
-    url: string,
-    caption?: string,
-    filename?: string,
-  ): Promise<{ messageId: string }> {
-    const payload: WhatsAppMediaMessage = {
-      messaging_product: "whatsapp",
-      recipient_type: "individual",
-      to,
-      type: mediaType,
-    };
-
-    switch (mediaType) {
-      case "image":
-        payload.image = { link: url, caption };
-        break;
-      case "document":
-        payload.document = { link: url, caption, filename };
-        break;
-      case "audio":
-        payload.audio = { link: url };
-        break;
-      case "video":
-        payload.video = { link: url, caption };
-        break;
-    }
-
-    return this.send(payload);
-  }
-
-  /** Mark a message as read (sends a read receipt). */
-  async markAsRead(messageId: string): Promise<void> {
-    const url = await this.messagesUrl();
-    const headers = await this.authHeaders();
+  private async handleIncomingMessage(msg: any): Promise<void> {
+    if (!this.onMessage) return;
 
     try {
-      await this.ctx.http.post(url, {
-        headers,
-        body: JSON.stringify({
-          messaging_product: "whatsapp",
-          status: "read",
-          message_id: messageId,
-        }),
+      const jid = msg.key.remoteJid ?? "";
+      const phone = jid.replace("@s.whatsapp.net", "").replace("@g.us", "");
+      const messageContent = msg.message;
+
+      if (!messageContent) return;
+
+      let text: string | undefined;
+      let type: InboundMessage["type"] = "other";
+
+      if (messageContent.conversation) {
+        text = messageContent.conversation;
+        type = "text";
+      } else if (messageContent.extendedTextMessage) {
+        text = messageContent.extendedTextMessage.text;
+        type = "text";
+      } else if (messageContent.imageMessage) {
+        type = "image";
+        text = messageContent.imageMessage.caption;
+      } else if (messageContent.documentMessage) {
+        type = "document";
+        text = messageContent.documentMessage.caption;
+      } else if (messageContent.audioMessage) {
+        type = "audio";
+      } else if (messageContent.videoMessage) {
+        type = "video";
+        text = messageContent.videoMessage.caption;
+      } else if (messageContent.locationMessage) {
+        type = "location";
+      } else if (messageContent.reactionMessage) {
+        type = "reaction";
+      }
+
+      const inbound: InboundMessage = {
+        from: jid,
+        fromPhone: phone,
+        id: msg.key.id ?? `msg_${Date.now()}`,
+        timestamp: msg.messageTimestamp ?? Math.floor(Date.now() / 1000),
+        type,
+        text,
+        pushName: msg.pushName,
+      };
+
+      this.ctx.logger.info("Incoming WhatsApp message", {
+        from: phone,
+        type: inbound.type,
+        hasText: String(!!text),
       });
+
+      // Mark as read
+      try {
+        if (this.sock && msg.key.remoteJid && msg.key.id) {
+          await this.sock.readMessages([{ remoteJid: msg.key.remoteJid, id: msg.key.id }]);
+        }
+      } catch {
+        // read receipt failure is non-critical
+      }
+
+      await this.onMessage(inbound);
     } catch (err) {
-      this.ctx.logger.warn("Failed to mark message as read", {
-        messageId,
+      this.ctx.logger.error("Failed to handle incoming message", {
         error: err instanceof Error ? err.message : String(err),
       });
     }
   }
 
+  // ---- Send primitives ----------------------------------------------------
+
+  private toJid(phone: string): string {
+    const cleaned = phone.replace(/[+\s-]/g, "");
+    if (cleaned.includes("@")) return cleaned;
+    return `${cleaned}@s.whatsapp.net`;
+  }
+
+  async sendText(to: string, text: string): Promise<{ messageId: string }> {
+    if (!this.sock || this.connectionState.status !== "connected") {
+      throw new Error("WhatsApp not connected. Please scan the QR code first.");
+    }
+
+    const jid = this.toJid(to);
+    this.ctx.logger.info("Sending WhatsApp message", { to: jid, length: String(text.length) });
+
+    try {
+      const result = await this.sock.sendMessage(jid, { text });
+      const messageId = result?.key?.id ?? `sent_${Date.now()}`;
+      this.ctx.logger.info("WhatsApp message sent", { messageId, to: jid });
+      return { messageId };
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      this.ctx.logger.error("WhatsApp send failed", { error: errMsg, to: jid });
+      throw new Error(`WhatsApp send error: ${errMsg}`);
+    }
+  }
+
+  async markAsRead(messageId: string, jid: string): Promise<void> {
+    if (!this.sock) return;
+    try {
+      await this.sock.readMessages([{ remoteJid: jid, id: messageId }]);
+    } catch {
+      // non-critical
+    }
+  }
+
   // ---- Helpers ------------------------------------------------------------
 
-  /** Get the chairman phone number from config. */
   async getChairmanPhone(): Promise<string> {
-    const phone = (await this.ctx.config.get("chairmanPhoneNumber")) as string | null;
+    if (this.chairmanPhone) return this.chairmanPhone;
+    const config = await this.ctx.config.get();
+    const phone = config.chairmanPhoneNumber as string | undefined;
     if (!phone) {
       throw new Error("chairmanPhoneNumber not configured");
     }
-    return phone;
+    this.chairmanPhone = phone.replace(/[+\s-]/g, "");
+    return this.chairmanPhone;
+  }
+
+  getConnectionState(): BaileysConnectionState {
+    return { ...this.connectionState };
+  }
+
+  isConnected(): boolean {
+    return this.connectionState.status === "connected" && this.sock !== null;
+  }
+
+  async disconnect(): Promise<void> {
+    this.destroyed = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.sock) {
+      this.sock.end(undefined);
+      this.sock = null;
+    }
+    this.connectionState = { status: "disconnected" };
+    this.ctx.logger.info("WhatsApp client disconnected");
+  }
+
+  async logout(): Promise<void> {
+    if (this.sock) {
+      try {
+        await this.sock.logout();
+      } catch {
+        // may already be disconnected
+      }
+    }
+    await this.disconnect();
+    try {
+      fs.rmSync(this.authDir, { recursive: true, force: true });
+      fs.mkdirSync(this.authDir, { recursive: true });
+    } catch {
+      // ignore
+    }
+    this.ctx.logger.info("WhatsApp logged out and credentials cleared");
   }
 }

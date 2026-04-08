@@ -1,9 +1,9 @@
 {
   "id": "paperclip.whatsapp-gateway",
   "apiVersion": 1,
-  "version": "0.1.0",
-  "displayName": "WhatsApp Gateway",
-  "description": "Communication backbone for the Paper marketing platform. Routes all human communication — questions, approvals, dashboards, commands — through WhatsApp.",
+  "version": "0.2.0",
+  "displayName": "WhatsApp Gateway (Baileys)",
+  "description": "Communication backbone for the Paper marketing platform. Uses Baileys (WhatsApp Web protocol) — scan a QR code to connect your personal WhatsApp. No Business API or third-party services needed.",
   "author": "Paperclip",
   "categories": ["connector", "automation"],
   "capabilities": [
@@ -30,56 +30,42 @@
   "instanceConfigSchema": {
     "type": "object",
     "properties": {
-      "whatsappPhoneNumberId": {
-        "type": "string",
-        "title": "WhatsApp Phone Number ID",
-        "description": "The Phone Number ID from the WhatsApp Business API dashboard"
-      },
-      "whatsappAccessTokenRef": {
-        "type": "string",
-        "title": "WhatsApp Access Token (secret ref)",
-        "description": "Secret reference for the WhatsApp Cloud API permanent access token"
-      },
-      "whatsappVerifyToken": {
-        "type": "string",
-        "title": "WhatsApp Webhook Verify Token",
-        "description": "Token used to verify the webhook subscription handshake"
-      },
-      "whatsappBusinessAccountId": {
-        "type": "string",
-        "title": "WhatsApp Business Account ID",
-        "description": "The WABA ID from Meta Business Manager"
-      },
       "chairmanPhoneNumber": {
         "type": "string",
         "title": "Chairman Phone Number",
-        "description": "The chairman's WhatsApp number in international format (e.g. 972501234567)"
+        "description": "The chairman's WhatsApp number in international format without + (e.g. 972501234567)"
       },
-      "webhookUrl": {
+      "authDataDir": {
         "type": "string",
-        "title": "Webhook URL",
-        "description": "Public URL where WhatsApp will send inbound message webhooks"
+        "title": "Auth Data Directory",
+        "description": "Path to store Baileys auth credentials. Defaults to ~/.paper/whatsapp-auth/",
+        "default": ""
       }
     },
-    "required": [
-      "whatsappPhoneNumberId",
-      "whatsappAccessTokenRef",
-      "whatsappVerifyToken",
-      "chairmanPhoneNumber"
-    ]
+    "required": ["chairmanPhoneNumber"]
   },
   "webhooks": [
     {
-      "path": "/whatsapp/inbound",
-      "methods": ["GET", "POST"],
-      "description": "Handles WhatsApp Cloud API webhook verification (GET) and inbound message processing (POST)"
+      "path": "/whatsapp/qr",
+      "methods": ["GET"],
+      "description": "Returns the current QR code for WhatsApp Web authentication as a base64 PNG image"
+    },
+    {
+      "path": "/whatsapp/status",
+      "methods": ["GET"],
+      "description": "Returns connection status (disconnected, qr_pending, connected)"
+    },
+    {
+      "path": "/whatsapp/logout",
+      "methods": ["POST"],
+      "description": "Disconnects WhatsApp session and clears stored credentials"
     }
   ],
   "tools": [
     {
       "name": "whatsapp_send_message",
       "displayName": "Send WhatsApp Message",
-      "description": "Send a text or template message to the chairman via WhatsApp.",
+      "description": "Send a text message to the chairman via WhatsApp.",
       "parametersSchema": {
         "type": "object",
         "properties": {
@@ -89,16 +75,7 @@
           },
           "to": {
             "type": "string",
-            "description": "Recipient phone number. Defaults to chairman if omitted."
-          },
-          "templateName": {
-            "type": "string",
-            "description": "Optional WhatsApp template name to use instead of plain text"
-          },
-          "templateParams": {
-            "type": "array",
-            "items": { "type": "string" },
-            "description": "Template parameter values"
+            "description": "Recipient phone number (international format, no +). Defaults to chairman if omitted."
           }
         },
         "required": ["message"]
@@ -144,7 +121,7 @@
     {
       "name": "whatsapp_request_approval",
       "displayName": "Request Approval via WhatsApp",
-      "description": "Send an approval request to the chairman with interactive Approve/Reject/Question buttons.",
+      "description": "Send an approval request to the chairman. They reply with 1 (Approve), 2 (Reject), or 3 (Question).",
       "parametersSchema": {
         "type": "object",
         "properties": {

@@ -149,7 +149,7 @@ export function marketingDashboardService(db: Db) {
         ${dateFilter}
       `);
 
-      const r = rows.rows[0] ?? {};
+      const r = rows[0] ?? {};
       const totalSpent = Number(r.total_spent ?? 0);
       const totalClicks = Number(r.total_clicks ?? 0);
       const totalConversions = Number(r.total_conversions ?? 0);
@@ -203,7 +203,7 @@ export function marketingDashboardService(db: Db) {
         ${productFilter}
       `);
 
-      const r = rows.rows[0] ?? {};
+      const r = rows[0] ?? {};
       const impressions = Number(r.impressions ?? 0);
       const clicks = Number(r.clicks ?? 0);
       const conversions = Number(r.conversions ?? 0);
@@ -261,7 +261,7 @@ export function marketingDashboardService(db: Db) {
         ORDER BY created_at DESC
       `);
 
-      return rows.rows.map(mapCampaignRow);
+      return rows.map(mapCampaignRow);
     }, []);
   }
 
@@ -280,7 +280,7 @@ export function marketingDashboardService(db: Db) {
         WHERE company_id = ${companyId}
       `);
 
-      const r = rows.rows[0] ?? {};
+      const r = rows[0] ?? {};
       const totalBudget = Number(r.total_budget ?? 0);
       const totalSpent = Number(r.total_spent ?? 0);
       const campaignCount = Number(r.campaign_count ?? 0);
@@ -291,8 +291,8 @@ export function marketingDashboardService(db: Db) {
         SELECT MIN(created_at) AS earliest FROM marketing_campaigns
         WHERE company_id = ${companyId}
       `);
-      const earliest = dateRows.rows[0]?.earliest
-        ? new Date(dateRows.rows[0].earliest as string)
+      const earliest = dateRows[0]?.earliest
+        ? new Date(dateRows[0].earliest as string)
         : new Date();
       const daysSinceStart = Math.max(
         1,
@@ -343,7 +343,7 @@ export function marketingDashboardService(db: Db) {
         ORDER BY spent_cents DESC
       `);
 
-      return rows.rows.map((r: any) => {
+      return rows.map((r: any) => {
         const impressions = Number(r.impressions ?? 0);
         const clicks = Number(r.clicks ?? 0);
         const conversions = Number(r.conversions ?? 0);
@@ -382,8 +382,8 @@ export function marketingDashboardService(db: Db) {
 
         result.push({
           stage,
-          count: rows.rows.length,
-          items: rows.rows.map((r: any) => ({
+          count: rows.length,
+          items: rows.map((r: any) => ({
             id: r.id as string,
             title: r.title as string,
             type: r.type as string,
@@ -426,7 +426,7 @@ export function marketingDashboardService(db: Db) {
         LIMIT ${limit}
       `);
 
-      return rows.rows.map((r: any) => ({
+      return rows.map((r: any) => ({
         id: r.id as string,
         agentId: r.agent_id as string,
         agentName: (r.agent_name as string) ?? null,
@@ -474,7 +474,7 @@ export function marketingDashboardService(db: Db) {
         WHERE company_id = ${companyId}
         ORDER BY created_at DESC
       `);
-      return rows.rows.map(mapProductRow);
+      return rows.map(mapProductRow);
     }, []);
   }
 
@@ -499,7 +499,7 @@ export function marketingDashboardService(db: Db) {
       SELECT * FROM marketing_products WHERE id = ${id} LIMIT 1
     `);
 
-    return mapProductRow(rows.rows[0]);
+    return mapProductRow(rows[0]);
   }
 
   // ------------------------------------------------------------------

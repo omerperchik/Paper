@@ -1,11 +1,12 @@
 // ---------------------------------------------------------------------------
-// WhatsApp Gateway Plugin — worker entrypoint
+// WhatsApp Gateway Plugin — worker entrypoint (Baileys-based)
 // Communication backbone for the Paper marketing platform.
-// All human communication flows through WhatsApp: questions, approvals,
-// dashboards, commands, and notifications.
+// Uses Baileys (WhatsApp Web protocol) — scan QR to connect.
+// No Business API or third-party services needed.
 // ---------------------------------------------------------------------------
 
 import { definePlugin, runWorker } from "@paperclipai/plugin-sdk";
+import type { PluginWebhookInput } from "@paperclipai/plugin-sdk";
 
 // Services
 import { WhatsAppClient } from "./services/whatsapp-client.js";
@@ -16,7 +17,6 @@ import { CommandParser } from "./services/command-parser.js";
 import { DashboardRenderer } from "./services/dashboard-renderer.js";
 
 // Handlers
-import { InboundWebhookHandler } from "./handlers/inbound-webhook.js";
 import { ApprovalHandler } from "./handlers/approval-handler.js";
 import { CommandHandler } from "./handlers/command-handler.js";
 import { NotificationHandler } from "./handlers/notification-handler.js";
@@ -28,100 +28,85 @@ import { registerApprovalTool } from "./tools/whatsapp-approval.js";
 import { registerDashboardTool } from "./tools/whatsapp-dashboard.js";
 import { registerNotifyTool } from "./tools/whatsapp-notify.js";
 
+// Module-level references for onWebhook access
+let _waClient: WhatsAppClient | null = null;
+
 const plugin = definePlugin({
   async setup(ctx) {
-    ctx.logger.info("WhatsApp Gateway plugin starting up");
+    ctx.logger.info("WhatsApp Gateway plugin starting up (Baileys mode)");
+
+    // Cast ctx to our simplified type for service constructors
+    const pctx = ctx as any;
 
     // ---- Initialize services ------------------------------------------------
 
-    const waClient = new WhatsAppClient(ctx);
-    const sessions = new SessionManager(ctx);
-    const approvalBridge = new ApprovalBridge(ctx, waClient);
+    const waClient = new WhatsAppClient(pctx);
+    _waClient = waClient;
+    const sessions = new SessionManager(pctx);
+    const approvalBridge = new ApprovalBridge(pctx, waClient);
     const commandParser = new CommandParser();
     const dashRenderer = new DashboardRenderer();
-    const router = new MessageRouter(ctx, sessions, approvalBridge, commandParser);
+    const router = new MessageRouter(pctx, sessions, approvalBridge, commandParser);
 
     // ---- Initialize handlers ------------------------------------------------
 
-    const webhookHandler = new InboundWebhookHandler(ctx, waClient, router);
-    const approvalHandler = new ApprovalHandler(ctx, waClient, approvalBridge, sessions);
-    const commandHandler = new CommandHandler(ctx, waClient, dashRenderer, approvalHandler);
-    const notificationHandler = new NotificationHandler(ctx, waClient, dashRenderer);
+    const approvalHandler = new ApprovalHandler(pctx, waClient, approvalBridge, sessions);
+    const commandHandler = new CommandHandler(pctx, waClient, dashRenderer, approvalHandler);
+    const notificationHandler = new NotificationHandler(pctx, waClient, dashRenderer);
+
+    // ---- Wire up message handling -------------------------------------------
+
+    waClient.setMessageHandler(async (message) => {
+      ctx.logger.info("Processing inbound Baileys message", {
+        from: message.fromPhone,
+        type: message.type,
+      });
+
+      try {
+        const result = await router.route(message);
+
+        if (result.handler === "command" && result.result) {
+          await commandHandler.execute(result.result as any, message.fromPhone);
+        }
+
+        ctx.logger.info("Message routed", {
+          messageId: message.id,
+          handler: result.handler,
+          handled: String(result.handled),
+        });
+      } catch (err) {
+        ctx.logger.error("Failed to process inbound message", {
+          messageId: message.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    });
+
+    // ---- Start Baileys connection -------------------------------------------
+
+    void waClient.connect().catch((err) => {
+      ctx.logger.error("Failed to start Baileys connection", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
 
     // ---- Register tools -----------------------------------------------------
 
-    registerSendTool(ctx, waClient);
-    registerAskTool(ctx, waClient, sessions);
-    registerApprovalTool(ctx, approvalHandler);
-    registerDashboardTool(ctx, waClient, dashRenderer);
-    registerNotifyTool(ctx, notificationHandler);
-
-    // ---- Register webhook ---------------------------------------------------
-
-    ctx.webhooks.register("/whatsapp/inbound", async (req) => {
-      return webhookHandler.handle(req);
-    });
+    registerSendTool(pctx, waClient);
+    registerAskTool(pctx, waClient, sessions);
+    registerApprovalTool(pctx, approvalHandler);
+    registerDashboardTool(pctx, waClient, dashRenderer);
+    registerNotifyTool(pctx, notificationHandler);
 
     // ---- Subscribe to platform events ---------------------------------------
 
-    // When an approval is resolved (approved/rejected), emit notification
-    ctx.events.on("approval.resolved", async (event) => {
-      const { approvalId, taskId, agentId, status } = event as unknown as {
-        approvalId: string;
-        taskId: string;
-        agentId: string;
-        status: string;
-      };
+    ctx.events.on("plugin.whatsapp.approval.resolved" as any, async (event: any) => {
+      const { approvalId, taskId, agentId, status } = event;
       ctx.logger.info("Approval resolved", { approvalId, taskId, status });
-      // The approval bridge already sent a confirmation to the chairman.
-      // Here we emit a platform-wide event for other plugins to consume.
-      await ctx.events.emit("whatsapp.approval.resolved", {
-        approvalId,
-        taskId,
-        agentId,
-        status,
-      });
     });
 
-    // Agent errors — forward to chairman
-    ctx.events.on("agent.error", async (event) => {
-      const { agentId, agentName, error: errorMsg, taskId } = event as unknown as {
-        agentId: string;
-        agentName?: string;
-        error: string;
-        taskId?: string;
-      };
-      ctx.logger.warn("Agent error received, forwarding to WhatsApp", { agentId, taskId });
-      await notificationHandler.sendAgentError({
-        agentId,
-        agentName: (agentName as string) ?? agentId,
-        errorMessage: typeof errorMsg === "string" ? errorMsg : JSON.stringify(errorMsg),
-        taskId,
-      });
-    });
-
-    // Budget alerts — forward to chairman
-    ctx.events.on("budget.alert", async (event) => {
-      const { channel, currentSpend, budget, percentUsed } = event as unknown as {
-        channel: string;
-        currentSpend: number;
-        budget: number;
-        percentUsed: number;
-      };
-      ctx.logger.warn("Budget alert received, forwarding to WhatsApp", { channel, percentUsed });
-      await notificationHandler.sendBudgetAlert({ channel, currentSpend, budget, percentUsed });
-    });
-
-    // Task comments tagged for chairman — forward to WhatsApp
-    ctx.events.on("issue.comment.created", async (event) => {
-      const { taskId, agentId, comment, tags } = event as unknown as {
-        taskId: string;
-        agentId: string;
-        comment: string;
-        tags?: string[];
-      };
-
-      // Only forward if tagged for chairman
+    ctx.events.on("issue.comment.created" as any, async (event: any) => {
+      const { taskId, agentId, comment, tags } = event;
       if (!tags?.includes("chairman") && !tags?.includes("ceo")) return;
 
       ctx.logger.info("Forwarding tagged comment to chairman", { taskId, agentId });
@@ -141,32 +126,54 @@ const plugin = definePlugin({
       }
     });
 
-    // Handle routed commands from the message router
-    ctx.events.on("whatsapp.message.processed", async (event) => {
-      const { handler } = event as unknown as { handler: string; messageId: string };
-      // If a command was parsed by the router, it returned the result but
-      // didn't execute it. We handle execution here via the command handler.
-      // In practice, the router returns the ParsedCommand and we execute it.
-      // This is handled inline in the router for now.
-      if (handler === "command") {
-        ctx.logger.info("Command processed via message router");
-      }
-    });
-
     // ---- Register data providers --------------------------------------------
 
     ctx.data.register("whatsapp-status", async () => {
+      const state = waClient.getConnectionState();
       return {
-        status: "connected",
+        status: state.status,
+        connected: state.status === "connected",
+        phone: state.phoneNumber ?? null,
+        name: state.pushName ?? null,
         plugin: "whatsapp-gateway",
       };
     });
 
-    ctx.logger.info("WhatsApp Gateway plugin initialized successfully");
+    ctx.logger.info("WhatsApp Gateway plugin initialized (Baileys mode)");
+  },
+
+  // ---- Webhook handler for QR/status/logout endpoints ----------------------
+
+  async onWebhook(input: PluginWebhookInput) {
+    const { endpointKey, rawBody, headers } = input;
+
+    // Note: the host routes POST /api/plugins/:id/webhooks/:endpointKey here.
+    // We parse the endpointKey to determine which endpoint was hit.
+    // Webhook responses are not supported in the current SDK — we use data providers
+    // and plugin streams for real-time QR code delivery instead.
+
+    if (!_waClient) return;
+
+    if (endpointKey === "whatsapp-qr" || endpointKey === "qr") {
+      // QR data is delivered via the data provider instead
+    }
+
+    if (endpointKey === "whatsapp-logout" || endpointKey === "logout") {
+      await _waClient.logout();
+    }
   },
 
   async onHealth() {
-    return { status: "ok" };
+    if (!_waClient) return { status: "ok" };
+    const state = _waClient.getConnectionState();
+    return {
+      status: "ok",
+      details: {
+        whatsapp: state.status,
+        connected: state.status === "connected",
+        phone: state.phoneNumber ?? null,
+      },
+    } as any;
   },
 });
 

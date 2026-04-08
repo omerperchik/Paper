@@ -32,6 +32,8 @@ import { pluginRoutes } from "./routes/plugins.js";
 import { adapterRoutes } from "./routes/adapters.js";
 import { tenantRoutes } from "./routes/tenants.js";
 import { marketplaceRoutes } from "./routes/marketplace.js";
+import { marketingDashboardRoutes } from "./routes/marketing-dashboard.js";
+import { marketingOAuthRoutes } from "./routes/marketing-oauth.js";
 import { pluginUiStaticRoutes } from "./routes/plugin-ui-static.js";
 import { applyUiBranding } from "./ui-branding.js";
 import { logger } from "./middleware/logger.js";
@@ -235,6 +237,8 @@ export async function createApp(
   api.use(adapterRoutes());
   api.use(tenantRoutes());
   api.use(marketplaceRoutes());
+  api.use(marketingDashboardRoutes(db));
+  api.use(marketingOAuthRoutes(db));
   api.use(
     accessRoutes(db, {
       deploymentMode: opts.deploymentMode,

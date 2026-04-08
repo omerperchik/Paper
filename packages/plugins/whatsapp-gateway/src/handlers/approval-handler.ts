@@ -1,5 +1,6 @@
 // ---------------------------------------------------------------------------
-// Approval Handler — process approval button clicks and manage approval flow
+// Approval Handler — send approval requests and manage approval flow
+// Updated for Baileys: uses text-based choices instead of interactive buttons.
 // ---------------------------------------------------------------------------
 
 import type { PluginContext, PendingApproval } from "../types.js";
@@ -26,8 +27,11 @@ export class ApprovalHandler {
   }
 
   /**
-   * Send an approval request to the chairman as an interactive button message.
-   * Returns the approval record with the WhatsApp message ID.
+   * Send an approval request to the chairman as a text message with numbered choices.
+   * Instead of interactive buttons (which require Business API), we use:
+   *   Reply 1 to Approve
+   *   Reply 2 to Reject
+   *   Reply 3 to Ask a Question
    */
   async sendApprovalRequest(params: {
     title: string;
@@ -55,32 +59,36 @@ export class ApprovalHandler {
       status: "pending",
     };
 
-    // Build the message body
+    // Build the message body with numbered choices
     const typeLabel = params.approvalType.charAt(0).toUpperCase() + params.approvalType.slice(1);
-    let body = `*[${typeLabel} Approval]*\n\n`;
-    body += `*${params.title}*\n\n`;
-    body += params.description;
+    const lines: string[] = [
+      `*APPROVAL REQUIRED*`,
+      `---`,
+      `*[${typeLabel}] ${params.title}*`,
+      ``,
+      params.description,
+    ];
 
     if (params.amount !== undefined) {
-      body += `\n\nAmount: *$${params.amount.toLocaleString()}*`;
+      lines.push(``, `Amount: *$${params.amount.toLocaleString()}*`);
     }
 
-    body += `\n\nAgent: ${params.agentId}`;
-    body += `\nTask: ${params.taskId}`;
-
-    // Send interactive message with buttons
-    const { messageId } = await this.waClient.sendInteractiveButtons(
-      chairmanPhone,
-      body,
-      [
-        { type: "reply", reply: { id: `approve_${approvalId}`, title: "Approve" } },
-        { type: "reply", reply: { id: `reject_${approvalId}`, title: "Reject" } },
-        { type: "reply", reply: { id: `question_${approvalId}`, title: "Question" } },
-      ],
-      "Approval Required",
+    lines.push(
+      ``,
+      `Agent: ${params.agentId}`,
+      `Task: ${params.taskId}`,
+      ``,
+      `---`,
+      `Reply *1* to Approve`,
+      `Reply *2* to Reject`,
+      `Reply *3* (or type your question) to Ask`,
     );
 
-    approval.whatsappMessageId = messageId;
+    const body = lines.join("\n");
+
+    // Send the text message
+    const { messageId } = await this.waClient.sendText(chairmanPhone, body);
+    approval.messageId = messageId;
 
     // Persist
     await this.approvalBridge.createApproval(approval);
@@ -99,10 +107,7 @@ export class ApprovalHandler {
 
   /** Approve all pending approvals at once. */
   async approveAllPending(from: string): Promise<{ approved: number }> {
-    // This is invoked when the chairman sends "approve all"
-    // We'd need to iterate through all pending approvals
-    // For now, emit an event that the platform can handle
-    await this.ctx.events.emit("whatsapp.approve_all_requested", { from });
+    this.ctx.logger.info("Approve-all requested via WhatsApp", { from });
 
     await this.waClient.sendText(
       from,
@@ -110,6 +115,6 @@ export class ApprovalHandler {
     );
 
     this.ctx.logger.info("Approve-all requested", { from });
-    return { approved: 0 }; // Actual count determined by event handler
+    return { approved: 0 };
   }
 }

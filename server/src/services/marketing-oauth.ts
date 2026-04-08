@@ -211,7 +211,7 @@ export function marketingOAuthService(db: Db) {
         LIMIT 1
       `);
 
-      return mapConnectionRow(rows.rows[0]);
+      return mapConnectionRow(rows[0]);
     },
 
     /**
@@ -223,7 +223,7 @@ export function marketingOAuthService(db: Db) {
         WHERE company_id = ${companyId}
         ORDER BY created_at DESC
       `);
-      return rows.rows.map(mapConnectionRow);
+      return rows.map(mapConnectionRow);
     },
 
     /**
@@ -234,7 +234,7 @@ export function marketingOAuthService(db: Db) {
         SELECT * FROM marketing_oauth_connections WHERE id = ${connectionId} LIMIT 1
       `);
 
-      const conn = connRows.rows[0];
+      const conn = connRows[0];
       if (!conn) throw notFound("Connection not found");
 
       const platform = conn.platform as OAuthPlatform;
@@ -287,7 +287,7 @@ export function marketingOAuthService(db: Db) {
       const updatedRows = await db.execute(sql`
         SELECT * FROM marketing_oauth_connections WHERE id = ${connectionId} LIMIT 1
       `);
-      return mapConnectionRow(updatedRows.rows[0]);
+      return mapConnectionRow(updatedRows[0]);
     },
 
     /**
@@ -297,7 +297,7 @@ export function marketingOAuthService(db: Db) {
       const connRows = await db.execute(sql`
         SELECT * FROM marketing_oauth_connections WHERE id = ${connectionId} LIMIT 1
       `);
-      if (!connRows.rows[0]) throw notFound("Connection not found");
+      if (!connRows[0]) throw notFound("Connection not found");
 
       // Best-effort revocation could be added per-platform here.
 
@@ -317,7 +317,7 @@ export function marketingOAuthService(db: Db) {
         LIMIT 1
       `);
 
-      const conn = rows.rows[0];
+      const conn = rows[0];
       if (!conn) throw notFound(`No ${platform} connection found for this company`);
 
       const expiresAt = conn.token_expires_at ? new Date(conn.token_expires_at as string) : null;
