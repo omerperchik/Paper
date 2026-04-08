@@ -1,6 +1,6 @@
 export const type = "gemma_local";
 export const label = "Gemma 4 via Ollama (local)";
-export const DEFAULT_OLLAMA_URL = "http://localhost:11434/v1";
+export const DEFAULT_OLLAMA_URL = "http://localhost:11434";
 export const DEFAULT_OLLAMA_MODEL = "gemma4:e4b";
 export const DEFAULT_FALLBACK_URL = "https://api.minimaxi.chat/v1";
 export const DEFAULT_FALLBACK_MODEL = "MiniMax-M1";

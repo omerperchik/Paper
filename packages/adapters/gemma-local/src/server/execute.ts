@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
-// Gemma-local adapter: sends prompts to Ollama (OpenAI-compat) with MiniMax
-// fallback.  Every AI call is trace-logged with model, fallback flag, latency,
-// and token counts.
+// Gemma-local adapter: sends prompts to Ollama (native API with think=false)
+// with MiniMax fallback (OpenAI-compat).  Every AI call is trace-logged with
+// model, fallback flag, latency, and token counts.
 // ---------------------------------------------------------------------------
 
 import type {
@@ -30,6 +30,13 @@ function asNumber(value: unknown, fallback: number): number {
     const n = Number(value);
     if (Number.isFinite(n)) return n;
   }
+  return fallback;
+}
+
+function asBool(value: unknown, fallback: boolean): boolean {
+  if (typeof value === "boolean") return value;
+  if (value === "true") return true;
+  if (value === "false") return false;
   return fallback;
 }
 
@@ -157,15 +164,132 @@ interface CallResult {
   provider: string;
 }
 
-async function callChatCompletion(opts: {
+/**
+ * Call Ollama's native /api/chat endpoint.
+ * This supports `think: false` to disable Gemma 4's extended thinking mode,
+ * which is critical for CPU inference where reasoning tokens cause timeouts.
+ */
+async function callOllamaNative(opts: {
+  baseUrl: string;
+  model: string;
+  messages: ChatMessage[];
+  tools: ToolDefinition[] | undefined;
+  timeoutMs: number;
+  think: boolean;
+  numPredict: number;
+}): Promise<CallResult> {
+  // Strip /v1 suffix if present — native API is at /api/chat
+  const base = opts.baseUrl.replace(/\/v1\/?$/, "").replace(/\/+$/, "");
+  const url = `${base}/api/chat`;
+
+  const body: Record<string, unknown> = {
+    model: opts.model,
+    messages: opts.messages,
+    stream: false,
+    think: opts.think,
+    options: {
+      num_predict: opts.numPredict,
+    },
+  };
+  if (opts.tools) {
+    body.tools = opts.tools;
+  }
+
+  const start = performance.now();
+  try {
+    const response = await fetchWithTimeout(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }, opts.timeoutMs);
+
+    const latencyMs = Math.round(performance.now() - start);
+    const responseBody = await response.json() as Record<string, unknown>;
+
+    if (!response.ok) {
+      const errMsg = typeof responseBody.error === "string"
+        ? responseBody.error
+        : `HTTP ${response.status} ${response.statusText}`;
+      return {
+        ok: false, parsed: null, errorMessage: errMsg, latencyMs,
+        wasFallback: false, model: opts.model, provider: "ollama",
+      };
+    }
+
+    // Parse Ollama native response format
+    const msg = responseBody.message as Record<string, unknown> | undefined;
+    const content = typeof msg?.content === "string" ? msg.content : "";
+
+    // Parse tool calls from native format
+    const rawToolCalls = Array.isArray(msg?.tool_calls) ? msg.tool_calls as Array<Record<string, unknown>> : [];
+    const toolCalls: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }> = [];
+    for (let i = 0; i < rawToolCalls.length; i++) {
+      const tc = rawToolCalls[i];
+      const fn = tc?.function as Record<string, unknown> | undefined;
+      if (fn && typeof fn.name === "string") {
+        toolCalls.push({
+          id: `call_${i}`,
+          type: "function",
+          function: {
+            name: fn.name,
+            arguments: typeof fn.arguments === "string"
+              ? fn.arguments
+              : JSON.stringify(fn.arguments ?? {}),
+          },
+        });
+      }
+    }
+
+    // Extract usage from Ollama native response
+    const promptTokens = typeof responseBody.prompt_eval_count === "number" ? responseBody.prompt_eval_count : 0;
+    const evalTokens = typeof responseBody.eval_count === "number" ? responseBody.eval_count : 0;
+
+    return {
+      ok: true,
+      parsed: {
+        content,
+        finishReason: responseBody.done ? "stop" : "length",
+        model: typeof responseBody.model === "string" ? responseBody.model : opts.model,
+        toolCalls,
+        usage: {
+          inputTokens: promptTokens as number,
+          outputTokens: evalTokens as number,
+          cachedInputTokens: 0,
+        },
+      },
+      errorMessage: null,
+      latencyMs,
+      wasFallback: false,
+      model: typeof responseBody.model === "string" ? responseBody.model as string : opts.model,
+      provider: "ollama",
+    };
+  } catch (err) {
+    const latencyMs = Math.round(performance.now() - start);
+    const isAbort = err instanceof DOMException && err.name === "AbortError";
+    const errMsg = isAbort
+      ? `Request timed out after ${Math.round(opts.timeoutMs / 1000)}s`
+      : err instanceof Error
+        ? err.message
+        : String(err);
+    return {
+      ok: false, parsed: null, errorMessage: errMsg, latencyMs,
+      wasFallback: false, model: opts.model, provider: "ollama",
+    };
+  }
+}
+
+/**
+ * Call OpenAI-compatible chat completions endpoint (used for MiniMax fallback).
+ */
+async function callOpenAICompat(opts: {
   baseUrl: string;
   model: string;
   apiKey: string | null;
   messages: ChatMessage[];
   tools: ToolDefinition[] | undefined;
   timeoutMs: number;
+  maxTokens: number;
   provider: string;
-  wasFallback: boolean;
 }): Promise<CallResult> {
   const url = `${opts.baseUrl.replace(/\/+$/, "")}/chat/completions`;
   const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -176,6 +300,7 @@ async function callChatCompletion(opts: {
   const body: Record<string, unknown> = {
     model: opts.model,
     messages: opts.messages,
+    max_tokens: opts.maxTokens,
   };
   if (opts.tools) {
     body.tools = opts.tools;
@@ -196,25 +321,15 @@ async function callChatCompletion(opts: {
     if (!response.ok) {
       const errMsg = parseErrorResponse(responseBody) ?? `HTTP ${response.status} ${response.statusText}`;
       return {
-        ok: false,
-        parsed: null,
-        errorMessage: errMsg,
-        latencyMs,
-        wasFallback: opts.wasFallback,
-        model: opts.model,
-        provider: opts.provider,
+        ok: false, parsed: null, errorMessage: errMsg, latencyMs,
+        wasFallback: true, model: opts.model, provider: opts.provider,
       };
     }
 
     const parsed = parseChatCompletion(responseBody);
     return {
-      ok: true,
-      parsed,
-      errorMessage: null,
-      latencyMs,
-      wasFallback: opts.wasFallback,
-      model: parsed.model ?? opts.model,
-      provider: opts.provider,
+      ok: true, parsed, errorMessage: null, latencyMs,
+      wasFallback: true, model: parsed.model ?? opts.model, provider: opts.provider,
     };
   } catch (err) {
     const latencyMs = Math.round(performance.now() - start);
@@ -225,13 +340,8 @@ async function callChatCompletion(opts: {
         ? err.message
         : String(err);
     return {
-      ok: false,
-      parsed: null,
-      errorMessage: errMsg,
-      latencyMs,
-      wasFallback: opts.wasFallback,
-      model: opts.model,
-      provider: opts.provider,
+      ok: false, parsed: null, errorMessage: errMsg, latencyMs,
+      wasFallback: true, model: opts.model, provider: opts.provider,
     };
   }
 }
@@ -279,9 +389,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const fallbackUrl = asString(config.fallbackUrl, DEFAULT_FALLBACK_URL);
   const fallbackModel = asString(config.fallbackModel, DEFAULT_FALLBACK_MODEL);
   const fallbackApiKey = asString(config.fallbackApiKey, "");
-  const ollamaTimeoutSec = asNumber(config.timeoutSec, 240);
+  const ollamaTimeoutSec = asNumber(config.timeoutSec, 600);
   const fallbackTimeoutSec = asNumber(config.fallbackTimeoutSec, 120);
   const systemPrompt = asString(config.systemPrompt, "");
+  const enableThinking = asBool(config.enableThinking, false);
+  const numPredict = asNumber(config.numPredict, 2048);
 
   // Build prompt from template
   const promptTemplate = asString(
@@ -302,10 +414,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   if (onMeta) {
     await onMeta({
       adapterType: "gemma_local",
-      command: `${ollamaUrl}/chat/completions`,
+      command: `${ollamaUrl}/api/chat`,
       cwd: process.cwd(),
       commandNotes: [
-        `Primary: Ollama at ${ollamaUrl} model=${ollamaModel} timeout=${ollamaTimeoutSec}s`,
+        `Primary: Ollama at ${ollamaUrl} model=${ollamaModel} timeout=${ollamaTimeoutSec}s think=${enableThinking} num_predict=${numPredict}`,
         `Fallback: MiniMax at ${fallbackUrl} model=${fallbackModel} timeout=${fallbackTimeoutSec}s`,
         `Messages: ${messages.length} (${tools ? tools.length + " tools" : "no tools"})`,
       ],
@@ -315,18 +427,17 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   }
 
   await onLog("stderr", `[gemma-local] Starting execution run=${runId} agent=${agent.id}\n`);
-  await onLog("stderr", `[gemma-local] Primary: ${ollamaUrl} model=${ollamaModel}\n`);
+  await onLog("stderr", `[gemma-local] Primary: ${ollamaUrl} model=${ollamaModel} think=${enableThinking}\n`);
 
-  // Attempt primary (Ollama)
-  const primary = await callChatCompletion({
+  // Attempt primary (Ollama native API with think control)
+  const primary = await callOllamaNative({
     baseUrl: ollamaUrl,
     model: ollamaModel,
-    apiKey: null, // Ollama typically needs no auth
     messages,
     tools,
     timeoutMs: ollamaTimeoutSec * 1000,
-    provider: "ollama",
-    wasFallback: false,
+    think: enableThinking,
+    numPredict,
   });
   await traceLog(onLog, primary);
 
@@ -349,15 +460,15 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     return buildErrorResult(primary, `Ollama failed: ${primary.errorMessage ?? "unknown"} (no fallback API key configured)`);
   }
 
-  const fallback = await callChatCompletion({
+  const fallback = await callOpenAICompat({
     baseUrl: fallbackUrl,
     model: fallbackModel,
     apiKey: fallbackApiKey,
     messages,
     tools,
     timeoutMs: fallbackTimeoutSec * 1000,
+    maxTokens: numPredict,
     provider: "minimax",
-    wasFallback: true,
   });
   await traceLog(onLog, fallback);
 
