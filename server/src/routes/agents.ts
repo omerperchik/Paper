@@ -491,6 +491,15 @@ export function agentRoutes(db: Db) {
       next.model = DEFAULT_GEMINI_LOCAL_MODEL;
       return ensureGatewayDeviceKey(adapterType, next);
     }
+    if (adapterType === "gemma_local") {
+      if (!asNonEmptyString(next.ollamaUrl)) {
+        next.ollamaUrl = process.env.OLLAMA_URL || "http://localhost:11434/v1";
+      }
+      if (!asNonEmptyString(next.ollamaModel)) {
+        next.ollamaModel = process.env.OLLAMA_MODEL || "gemma4:e4b";
+      }
+      return ensureGatewayDeviceKey(adapterType, next);
+    }
     // OpenCode requires explicit model selection — no default
     if (adapterType === "cursor" && !asNonEmptyString(next.model)) {
       next.model = DEFAULT_CURSOR_LOCAL_MODEL;

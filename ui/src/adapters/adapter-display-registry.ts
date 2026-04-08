@@ -56,7 +56,6 @@ const adapterDisplayMap: Record<string, AdapterDisplayInfo> = {
     label: "Claude Code",
     description: "Local Claude agent",
     icon: Sparkles,
-    recommended: true,
   },
   codex_local: {
     label: "Codex",
@@ -78,6 +77,12 @@ const adapterDisplayMap: Record<string, AdapterDisplayInfo> = {
     label: "Hermes Agent",
     description: "Local Hermes CLI agent",
     icon: HermesIcon,
+  },
+  gemma_local: {
+    label: "Gemma 4 (Ollama)",
+    description: "Local Gemma 4 via Ollama with MiniMax fallback",
+    icon: Cpu,
+    recommended: true,
   },
   pi_local: {
     label: "Pi",
