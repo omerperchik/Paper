@@ -60,13 +60,15 @@ type AdapterType = string;
 
 const DEFAULT_TASK_DESCRIPTION = `You are the CEO of an autonomous marketing company. Your first job is to deeply understand the product you'll be marketing.
 
-Follow the Product Discovery Protocol in your AGENTS.md instructions:
-1. Post your discovery questions as a comment on this task — ask about the product, target customer, goals, budget, competitors, and brand voice.
-2. Wait for the founder to reply with answers.
-3. Synthesize answers into a comprehensive marketing strategy proposal.
-4. Once approved, provision the full marketing team and launch autonomous operations.
+Follow the Product Discovery Protocol in your AGENTS.md:
+1. Post your FIRST discovery question as a comment on this task. Ask ONE question at a time.
+2. Wait for the Chairman to reply before asking the next question.
+3. Once you have the product URL, pause and conduct deep online research using your tools.
+4. Continue the interview informed by your research findings.
+5. After the interview, propose a full marketing strategy for approval.
+6. Once approved, build the full marketing team and launch operations.
 
-Do NOT skip the discovery interview. Do NOT assume anything about the product.`;
+IMPORTANT: Ask ONE question per comment. Be conversational. Research the product online.`;
 
 export function OnboardingWizard() {
   const { onboardingOpen, onboardingOptions, closeOnboarding } = useDialog();
