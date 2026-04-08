@@ -1,0 +1,612 @@
+{
+  "id": "paperclip.marketing-tools",
+  "apiVersion": 1,
+  "version": "0.1.0",
+  "displayName": "Marketing Tools",
+  "description": "Comprehensive marketing toolkit providing analytics, content quality checks, channel integrations, CAC tracking, browser automation, and outreach tools for marketing agents.",
+  "author": "Paperclip",
+  "categories": ["automation", "connector"],
+  "capabilities": [
+    "agent.tools.register",
+    "events.subscribe",
+    "events.emit",
+    "jobs.schedule",
+    "http.outbound",
+    "secrets.read-ref",
+    "plugin.state.read",
+    "plugin.state.write",
+    "activity.log.write",
+    "metrics.write",
+    "telemetry.track",
+    "companies.read",
+    "projects.read",
+    "issues.read",
+    "issues.create",
+    "agents.read"
+  ],
+  "entrypoints": {
+    "worker": "./dist/worker.js"
+  },
+  "instanceConfigSchema": {
+    "type": "object",
+    "properties": {
+      "googleAdsApiKeyRef": {
+        "type": "string",
+        "title": "Google Ads API Key (secret ref)",
+        "description": "Secret reference for the Google Ads API key"
+      },
+      "metaAdsApiKeyRef": {
+        "type": "string",
+        "title": "Meta Ads API Key (secret ref)",
+        "description": "Secret reference for the Meta/Facebook Ads API token"
+      },
+      "metaAdAccountId": {
+        "type": "string",
+        "title": "Meta Ad Account ID"
+      },
+      "gscApiKeyRef": {
+        "type": "string",
+        "title": "Google Search Console API Key (secret ref)"
+      },
+      "gscSiteUrl": {
+        "type": "string",
+        "title": "Google Search Console Site URL"
+      },
+      "brevoApiKeyRef": {
+        "type": "string",
+        "title": "Brevo API Key (secret ref)"
+      },
+      "resendApiKeyRef": {
+        "type": "string",
+        "title": "Resend API Key (secret ref)"
+      },
+      "oneSignalAppId": {
+        "type": "string",
+        "title": "OneSignal App ID"
+      },
+      "oneSignalApiKeyRef": {
+        "type": "string",
+        "title": "OneSignal API Key (secret ref)"
+      },
+      "redditClientIdRef": {
+        "type": "string",
+        "title": "Reddit Client ID (secret ref)"
+      },
+      "redditClientSecretRef": {
+        "type": "string",
+        "title": "Reddit Client Secret (secret ref)"
+      },
+      "whatsappApiKeyRef": {
+        "type": "string",
+        "title": "WhatsApp API Key (secret ref)"
+      },
+      "whatsappPhoneNumberId": {
+        "type": "string",
+        "title": "WhatsApp Phone Number ID"
+      },
+      "socialMediaApiKeyRef": {
+        "type": "string",
+        "title": "Social Media Aggregator API Key (secret ref)"
+      },
+      "cacAlertThreshold": {
+        "type": "number",
+        "title": "CAC Alert Threshold ($)",
+        "description": "Alert when any channel CAC exceeds this value",
+        "default": 100
+      },
+      "dailyBriefEnabled": {
+        "type": "boolean",
+        "title": "Enable Daily Marketing Brief",
+        "default": true
+      },
+      "approvalRequiredForSpend": {
+        "type": "boolean",
+        "title": "Require Approval for Spend Actions",
+        "description": "Gate email sends, social posts, and push notifications behind approval",
+        "default": true
+      },
+      "bannedAiWords": {
+        "type": "array",
+        "title": "Banned AI Words",
+        "description": "Additional words to flag in humanizer check",
+        "items": { "type": "string" },
+        "default": []
+      }
+    }
+  },
+  "jobs": [
+    {
+      "jobKey": "daily-brief",
+      "displayName": "Daily Marketing Brief",
+      "description": "Generates and distributes a daily marketing performance brief.",
+      "schedule": "0 8 * * *"
+    },
+    {
+      "jobKey": "cac-monitor",
+      "displayName": "CAC Monitor",
+      "description": "Checks CAC thresholds and emits alerts when exceeded.",
+      "schedule": "0 */4 * * *"
+    },
+    {
+      "jobKey": "reddit-monitor",
+      "displayName": "Reddit Monitor",
+      "description": "Scans configured subreddits for brand mentions and opportunities.",
+      "schedule": "*/30 * * * *"
+    }
+  ],
+  "tools": [
+    {
+      "name": "marketing_calculate_cac",
+      "displayName": "Calculate CAC by Channel",
+      "description": "Calculate Customer Acquisition Cost by channel from spend and conversion data.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "channels": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "spend": { "type": "number" },
+                "conversions": { "type": "number" }
+              },
+              "required": ["name", "spend", "conversions"]
+            }
+          }
+        },
+        "required": ["channels"]
+      }
+    },
+    {
+      "name": "marketing_ltv_cac_ratio",
+      "displayName": "LTV:CAC Ratio",
+      "description": "Calculate LTV:CAC ratio given lifetime value and acquisition cost.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "ltv": { "type": "number" },
+          "cac": { "type": "number" }
+        },
+        "required": ["ltv", "cac"]
+      }
+    },
+    {
+      "name": "marketing_anomaly_detect",
+      "displayName": "Anomaly Detection",
+      "description": "Z-score based anomaly detection on a time series of metrics.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "values": { "type": "array", "items": { "type": "number" } },
+          "labels": { "type": "array", "items": { "type": "string" } },
+          "threshold": { "type": "number", "default": 2 }
+        },
+        "required": ["values"]
+      }
+    },
+    {
+      "name": "marketing_experiment_score",
+      "displayName": "A/B Experiment Score",
+      "description": "Score an A/B experiment using statistical significance tests.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "control": { "type": "object", "properties": { "visitors": { "type": "number" }, "conversions": { "type": "number" } }, "required": ["visitors", "conversions"] },
+          "variant": { "type": "object", "properties": { "visitors": { "type": "number" }, "conversions": { "type": "number" } }, "required": ["visitors", "conversions"] },
+          "confidenceLevel": { "type": "number", "default": 0.95 }
+        },
+        "required": ["control", "variant"]
+      }
+    },
+    {
+      "name": "marketing_daily_brief",
+      "displayName": "Daily Marketing Brief",
+      "description": "Generate a daily marketing performance brief from all connected channels.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "date": { "type": "string", "description": "ISO date string (YYYY-MM-DD), defaults to today" },
+          "channels": { "type": "array", "items": { "type": "string" }, "description": "Filter to specific channels" }
+        }
+      }
+    },
+    {
+      "name": "marketing_humanizer_check",
+      "displayName": "Content Humanizer Check",
+      "description": "Check content against banned AI words/patterns and return a humanization score.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "content": { "type": "string" },
+          "strictMode": { "type": "boolean", "default": false }
+        },
+        "required": ["content"]
+      }
+    },
+    {
+      "name": "marketing_expert_panel",
+      "displayName": "Expert Panel Review",
+      "description": "Run content through a simulated expert panel for quality scoring.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "content": { "type": "string" },
+          "contentType": { "type": "string", "enum": ["blog", "ad_copy", "email", "social", "landing_page"] },
+          "targetAudience": { "type": "string" }
+        },
+        "required": ["content", "contentType"]
+      }
+    },
+    {
+      "name": "marketing_content_calendar",
+      "displayName": "Content Calendar",
+      "description": "Manage content calendar entries: list, add, update, or remove.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "action": { "type": "string", "enum": ["list", "add", "update", "remove"] },
+          "entry": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "title": { "type": "string" },
+              "channel": { "type": "string" },
+              "scheduledDate": { "type": "string" },
+              "status": { "type": "string", "enum": ["draft", "scheduled", "published", "cancelled"] },
+              "content": { "type": "string" },
+              "tags": { "type": "array", "items": { "type": "string" } }
+            }
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "channel": { "type": "string" },
+              "status": { "type": "string" },
+              "dateFrom": { "type": "string" },
+              "dateTo": { "type": "string" }
+            }
+          }
+        },
+        "required": ["action"]
+      }
+    },
+    {
+      "name": "marketing_seo_check",
+      "displayName": "SEO Check",
+      "description": "Check content for SEO best practices including keyword density, meta tag suggestions, and readability.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "content": { "type": "string" },
+          "targetKeyword": { "type": "string" },
+          "url": { "type": "string" },
+          "title": { "type": "string" },
+          "metaDescription": { "type": "string" }
+        },
+        "required": ["content", "targetKeyword"]
+      }
+    },
+    {
+      "name": "marketing_google_ads_report",
+      "displayName": "Google Ads Report",
+      "description": "Pull Google Ads performance data for a date range.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "dateFrom": { "type": "string" },
+          "dateTo": { "type": "string" },
+          "campaignIds": { "type": "array", "items": { "type": "string" } },
+          "metrics": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["dateFrom", "dateTo"]
+      }
+    },
+    {
+      "name": "marketing_meta_ads_report",
+      "displayName": "Meta Ads Report",
+      "description": "Pull Meta/Facebook Ads performance data for a date range.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "dateFrom": { "type": "string" },
+          "dateTo": { "type": "string" },
+          "campaignIds": { "type": "array", "items": { "type": "string" } },
+          "metrics": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["dateFrom", "dateTo"]
+      }
+    },
+    {
+      "name": "marketing_gsc_report",
+      "displayName": "Google Search Console Report",
+      "description": "Pull Google Search Console performance data.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "dateFrom": { "type": "string" },
+          "dateTo": { "type": "string" },
+          "dimensions": { "type": "array", "items": { "type": "string", "enum": ["query", "page", "country", "device"] } },
+          "rowLimit": { "type": "number", "default": 100 }
+        },
+        "required": ["dateFrom", "dateTo"]
+      }
+    },
+    {
+      "name": "marketing_social_metrics",
+      "displayName": "Social Media Metrics",
+      "description": "Pull social media metrics across platforms.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "platforms": { "type": "array", "items": { "type": "string", "enum": ["twitter", "linkedin", "instagram", "tiktok", "youtube"] } },
+          "dateFrom": { "type": "string" },
+          "dateTo": { "type": "string" },
+          "metrics": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["platforms", "dateFrom", "dateTo"]
+      }
+    },
+    {
+      "name": "marketing_email_metrics",
+      "displayName": "Email Campaign Metrics",
+      "description": "Pull email campaign performance metrics.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "campaignId": { "type": "string" },
+          "dateFrom": { "type": "string" },
+          "dateTo": { "type": "string" },
+          "provider": { "type": "string", "enum": ["brevo", "resend"] }
+        },
+        "required": ["dateFrom", "dateTo"]
+      }
+    },
+    {
+      "name": "marketing_reddit_monitor",
+      "displayName": "Reddit Monitor",
+      "description": "Monitor Reddit for brand mentions and engagement opportunities.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "subreddits": { "type": "array", "items": { "type": "string" } },
+          "keywords": { "type": "array", "items": { "type": "string" } },
+          "limit": { "type": "number", "default": 25 },
+          "sort": { "type": "string", "enum": ["relevance", "new", "hot", "top"], "default": "new" }
+        },
+        "required": ["keywords"]
+      }
+    },
+    {
+      "name": "marketing_track_spend",
+      "displayName": "Track Marketing Spend",
+      "description": "Record marketing spend by channel and campaign.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "channel": { "type": "string" },
+          "campaign": { "type": "string" },
+          "amount": { "type": "number" },
+          "currency": { "type": "string", "default": "USD" },
+          "date": { "type": "string" },
+          "category": { "type": "string", "enum": ["ad_spend", "tool_cost", "ai_inference", "content_creation", "other"] }
+        },
+        "required": ["channel", "amount", "date"]
+      }
+    },
+    {
+      "name": "marketing_track_conversion",
+      "displayName": "Track Conversion",
+      "description": "Record a conversion event with source attribution.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "channel": { "type": "string" },
+          "campaign": { "type": "string" },
+          "conversionType": { "type": "string", "enum": ["signup", "trial", "purchase", "upgrade", "other"] },
+          "value": { "type": "number" },
+          "date": { "type": "string" },
+          "metadata": { "type": "object" }
+        },
+        "required": ["channel", "conversionType", "date"]
+      }
+    },
+    {
+      "name": "marketing_cac_by_channel",
+      "displayName": "CAC by Channel",
+      "description": "Get current Customer Acquisition Cost broken down by channel.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "dateFrom": { "type": "string" },
+          "dateTo": { "type": "string" },
+          "channels": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    {
+      "name": "marketing_cac_trend",
+      "displayName": "CAC Trend",
+      "description": "Get CAC trend over time by channel.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "channel": { "type": "string" },
+          "period": { "type": "string", "enum": ["daily", "weekly", "monthly"], "default": "weekly" },
+          "lookbackDays": { "type": "number", "default": 90 }
+        }
+      }
+    },
+    {
+      "name": "marketing_optimize_budget",
+      "displayName": "Optimize Budget Allocation",
+      "description": "Suggest budget reallocation across channels to minimize overall CAC.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "totalBudget": { "type": "number" },
+          "constraints": {
+            "type": "object",
+            "description": "Min/max budget per channel",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "min": { "type": "number" },
+                "max": { "type": "number" }
+              }
+            }
+          }
+        },
+        "required": ["totalBudget"]
+      }
+    },
+    {
+      "name": "marketing_payback_period",
+      "displayName": "Payback Period by Channel",
+      "description": "Calculate customer payback period by acquisition channel.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "channel": { "type": "string" },
+          "avgMonthlyRevenue": { "type": "number" },
+          "grossMargin": { "type": "number", "description": "Gross margin as decimal (e.g., 0.7 for 70%)" }
+        },
+        "required": ["avgMonthlyRevenue", "grossMargin"]
+      }
+    },
+    {
+      "name": "marketing_scrape_serp",
+      "displayName": "Scrape SERP",
+      "description": "Scrape search engine results for a query. Useful when API access is not configured.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string" },
+          "engine": { "type": "string", "enum": ["google", "bing"], "default": "google" },
+          "numResults": { "type": "number", "default": 10 },
+          "location": { "type": "string" }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "marketing_scrape_competitor",
+      "displayName": "Scrape Competitor Page",
+      "description": "Analyze a competitor page for content, meta tags, and structure.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "url": { "type": "string" },
+          "extractors": { "type": "array", "items": { "type": "string", "enum": ["meta", "headings", "links", "images", "structured_data", "text"] } }
+        },
+        "required": ["url"]
+      }
+    },
+    {
+      "name": "marketing_scrape_app_store",
+      "displayName": "Scrape App Store",
+      "description": "Pull app store listing data for analysis.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "appId": { "type": "string" },
+          "store": { "type": "string", "enum": ["apple", "google"] },
+          "country": { "type": "string", "default": "us" }
+        },
+        "required": ["appId", "store"]
+      }
+    },
+    {
+      "name": "marketing_check_landing_page",
+      "displayName": "Audit Landing Page",
+      "description": "Audit a landing page for conversion optimization, load time, and best practices.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "url": { "type": "string" },
+          "checks": { "type": "array", "items": { "type": "string", "enum": ["cta", "load_time", "mobile", "accessibility", "seo", "trust_signals"] } }
+        },
+        "required": ["url"]
+      }
+    },
+    {
+      "name": "marketing_send_email_campaign",
+      "displayName": "Send Email Campaign",
+      "description": "Send an email campaign via Brevo or Resend. Requires approval when approvalRequiredForSpend is enabled.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "provider": { "type": "string", "enum": ["brevo", "resend"] },
+          "to": { "type": "array", "items": { "type": "string" } },
+          "subject": { "type": "string" },
+          "htmlBody": { "type": "string" },
+          "textBody": { "type": "string" },
+          "from": { "type": "string" },
+          "replyTo": { "type": "string" },
+          "tags": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["provider", "to", "subject", "htmlBody"]
+      }
+    },
+    {
+      "name": "marketing_schedule_social_post",
+      "displayName": "Schedule Social Post",
+      "description": "Schedule a social media post. Requires approval when approvalRequiredForSpend is enabled.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "platform": { "type": "string", "enum": ["twitter", "linkedin", "instagram", "tiktok"] },
+          "content": { "type": "string" },
+          "scheduledAt": { "type": "string" },
+          "mediaUrls": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["platform", "content"]
+      }
+    },
+    {
+      "name": "marketing_send_push_notification",
+      "displayName": "Send Push Notification",
+      "description": "Send a push notification via OneSignal. Requires approval when approvalRequiredForSpend is enabled.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string" },
+          "message": { "type": "string" },
+          "url": { "type": "string" },
+          "segments": { "type": "array", "items": { "type": "string" } },
+          "filters": { "type": "array", "items": { "type": "object" } }
+        },
+        "required": ["title", "message"]
+      }
+    },
+    {
+      "name": "marketing_whatsapp_brief",
+      "displayName": "Send WhatsApp Brief",
+      "description": "Send a marketing brief via WhatsApp. Requires approval when approvalRequiredForSpend is enabled.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "to": { "type": "string" },
+          "message": { "type": "string" },
+          "templateName": { "type": "string" },
+          "templateParams": { "type": "object" }
+        },
+        "required": ["to", "message"]
+      }
+    },
+    {
+      "name": "marketing_post_reddit_comment",
+      "displayName": "Post Reddit Comment",
+      "description": "Post a comment on Reddit. Always requires human approval before posting.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "postId": { "type": "string" },
+          "subreddit": { "type": "string" },
+          "comment": { "type": "string" }
+        },
+        "required": ["postId", "subreddit", "comment"]
+      }
+    }
+  ]
+}

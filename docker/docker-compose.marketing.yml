@@ -1,0 +1,70 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: paperclip
+      POSTGRES_PASSWORD: paperclip
+      POSTGRES_DB: paperclip
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U paperclip -d paperclip"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:11434/api/tags || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  server:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - "6000:3100"
+    environment:
+      DATABASE_URL: postgres://paperclip:paperclip@db:5432/paperclip
+      PORT: "3100"
+      HOST: "0.0.0.0"
+      SERVE_UI: "true"
+      PAPERCLIP_DEPLOYMENT_MODE: "authenticated"
+      PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
+      PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:-http://213.199.33.145:6000}"
+      BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET must be set}"
+      # Gemma4 / MiniMax AI configuration
+      OLLAMA_URL: "http://ollama:11434/v1"
+      OLLAMA_MODEL: "gemma4:e4b"
+      AI_FALLBACK_URL: "https://api.minimaxi.chat/v1"
+      AI_FALLBACK_MODEL: "MiniMax-M1"
+      AI_FALLBACK_API_KEY: "${AI_FALLBACK_API_KEY:-}"
+      # Marketing-specific settings
+      MARKETING_DEFAULT_CAC_ALERT_THRESHOLD: "${MARKETING_CAC_ALERT:-50}"
+      MARKETING_APPROVAL_REQUIRED: "${MARKETING_APPROVAL_REQUIRED:-true}"
+      # Telemetry
+      PAPERCLIP_TELEMETRY_DISABLED: "1"
+    volumes:
+      - paperclip-data:/paperclip
+    depends_on:
+      db:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  paperclip-data:
+  ollama-data:
