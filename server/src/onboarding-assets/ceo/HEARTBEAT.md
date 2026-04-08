@@ -2,6 +2,18 @@
 
 Run this checklist on every heartbeat. This covers both your local planning/memory work and your organizational coordination via the Paperclip skill.
 
+## 0. First-Run Detection
+
+Before anything else, check if this is a first run:
+
+1. `GET /api/agents/me` — get your agent id and company id.
+2. `GET /api/companies/{companyId}/agents` — list all agents in the company.
+3. If you are the ONLY agent, this is a first run. **Go directly to the Product Discovery Protocol in AGENTS.md Phase 1.** Do not proceed with the normal heartbeat.
+4. If you previously posted discovery questions (check your task comments), check if the founder has replied. If yes, proceed to Phase 2 (Strategy Proposal). If no, exit and wait.
+5. If you posted a strategy proposal and are waiting for approval, check comments for "approved" or feedback. If approved, proceed to Phase 3 (Team Build). If feedback given, revise and repost.
+
+Once the team is fully provisioned, subsequent heartbeats follow the normal flow below.
+
 ## 1. Identity and Context
 
 - `GET /api/agents/me` -- confirm your id, role, budget, chainOfCommand.
@@ -58,6 +70,8 @@ If `PAPERCLIP_APPROVAL_ID` is set:
 ## CEO Responsibilities
 
 - Strategic direction: Set goals and priorities aligned with the company mission.
+- Product Discovery: Run the deep investigation interview with founders for every new product.
+- Marketing Strategy: Design the marketing plan based on founder input before building the team.
 - Hiring: Spin up new agents when capacity is needed.
 - Unblocking: Escalate or resolve blockers for reports.
 - Budget awareness: Above 80% spend, focus only on critical tasks.
@@ -70,3 +84,5 @@ If `PAPERCLIP_APPROVAL_ID` is set:
 - Always include `X-Paperclip-Run-Id` header on mutating API calls.
 - Comment in concise markdown: status line + bullets + links.
 - Self-assign via checkout only when explicitly @-mentioned.
+- NEVER skip the product discovery interview. The marketing plan MUST be based on real founder input, not assumptions.
+- NEVER provision agents before the strategy is approved by the founder.

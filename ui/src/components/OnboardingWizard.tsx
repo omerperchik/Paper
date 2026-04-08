@@ -58,11 +58,15 @@ import {
 type Step = 1 | 2 | 3 | 4;
 type AdapterType = string;
 
-const DEFAULT_TASK_DESCRIPTION = `You are the CEO. You set the direction for the company.
+const DEFAULT_TASK_DESCRIPTION = `You are the CEO of an autonomous marketing company. Your first job is to deeply understand the product you'll be marketing.
 
-- hire a founding engineer
-- write a hiring plan
-- break the roadmap into concrete tasks and start delegating work`;
+Follow the Product Discovery Protocol in your AGENTS.md instructions:
+1. Post your discovery questions as a comment on this task — ask about the product, target customer, goals, budget, competitors, and brand voice.
+2. Wait for the founder to reply with answers.
+3. Synthesize answers into a comprehensive marketing strategy proposal.
+4. Once approved, provision the full marketing team and launch autonomous operations.
+
+Do NOT skip the discovery interview. Do NOT assume anything about the product.`;
 
 export function OnboardingWizard() {
   const { onboardingOpen, onboardingOptions, closeOnboarding } = useDialog();
@@ -121,7 +125,7 @@ export function OnboardingWizard() {
 
   // Step 3
   const [taskTitle, setTaskTitle] = useState(
-    "Hire your first engineer and create a hiring plan"
+    "Onboard new product — run discovery interview and build marketing team"
   );
   const [taskDescription, setTaskDescription] = useState(
     DEFAULT_TASK_DESCRIPTION
@@ -284,7 +288,7 @@ export function OnboardingWizard() {
     setCompanyName("");
     setCompanyGoal("");
     setAgentName("CEO");
-    setAdapterType("claude_local");
+    setAdapterType("gemma_local");
     setModel("");
     setCommand("");
     setArgs("");
@@ -294,7 +298,7 @@ export function OnboardingWizard() {
     setAdapterEnvLoading(false);
     setForceUnsetAnthropicApiKey(false);
     setUnsetAnthropicLoading(false);
-    setTaskTitle("Hire your first engineer and create a hiring plan");
+    setTaskTitle("Onboard new product — run discovery interview and build marketing team");
     setTaskDescription(DEFAULT_TASK_DESCRIPTION);
     setCreatedCompanyId(null);
     setCreatedCompanyPrefix(null);
