@@ -11,7 +11,6 @@ import {
   Boxes,
   Repeat,
   Settings,
-  BarChart3,
   Store,
   Building2,
   Megaphone,
@@ -113,7 +112,6 @@ export function Sidebar() {
 
         <SidebarSection label="Marketing">
           <SidebarNavItem to="/marketing" label="Marketing" icon={Megaphone} />
-          <SidebarNavItem to="/marketing/campaigns" label="Campaigns" icon={BarChart3} />
         </SidebarSection>
 
         <SidebarSection label="Company">
