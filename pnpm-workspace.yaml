@@ -4,6 +4,9 @@ packages:
   - packages/plugins/*
   - packages/plugins/examples/*
   - packages/plugins/marketing-tools
+  - packages/plugins/whatsapp-gateway
+  - packages/plugins/competitive-intel
+  - packages/plugins/meta-optimizer
   - server
   - ui
   - cli

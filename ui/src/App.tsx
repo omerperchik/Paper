@@ -38,6 +38,10 @@ import { AdapterManager } from "./pages/AdapterManager";
 import { PluginPage } from "./pages/PluginPage";
 import { RunTranscriptUxLab } from "./pages/RunTranscriptUxLab";
 import { OrgChart } from "./pages/OrgChart";
+import { MarketingDashboard } from "./pages/MarketingDashboard";
+import { TenantDashboard } from "./pages/TenantDashboard";
+import { TenantSettings } from "./pages/TenantSettings";
+import { Marketplace } from "./pages/Marketplace";
 import { NewAgent } from "./pages/NewAgent";
 import { AuthPage } from "./pages/Auth";
 import { BoardClaimPage } from "./pages/BoardClaim";
@@ -166,6 +170,13 @@ function boardRoutes() {
       <Route path="approvals/pending" element={<Approvals />} />
       <Route path="approvals/all" element={<Approvals />} />
       <Route path="approvals/:approvalId" element={<ApprovalDetail />} />
+      <Route path="marketing" element={<MarketingDashboard />} />
+      <Route path="marketing/campaigns" element={<MarketingDashboard />} />
+      <Route path="tenant" element={<TenantDashboard />} />
+      <Route path="tenant/settings" element={<TenantSettings />} />
+      <Route path="agency" element={<TenantDashboard />} />
+      <Route path="agency/settings" element={<TenantSettings />} />
+      <Route path="marketplace" element={<Marketplace />} />
       <Route path="costs" element={<Costs />} />
       <Route path="activity" element={<Activity />} />
       <Route path="inbox" element={<InboxRootRedirect />} />

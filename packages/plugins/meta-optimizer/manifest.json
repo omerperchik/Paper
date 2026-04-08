@@ -1,0 +1,182 @@
+{
+  "id": "paperclip.meta-optimizer",
+  "apiVersion": 1,
+  "version": "0.1.0",
+  "displayName": "Meta-Optimizer",
+  "description": "Self-improving system that tracks agent performance, analyzes prompt effectiveness, runs A/B experiments, and evolves playbooks based on measurable outcomes.",
+  "author": "Paperclip",
+  "categories": ["automation"],
+  "capabilities": [
+    "agent.tools.register",
+    "events.subscribe",
+    "events.emit",
+    "jobs.schedule",
+    "plugin.state.read",
+    "plugin.state.write",
+    "activity.log.write",
+    "metrics.write",
+    "agents.read"
+  ],
+  "entrypoints": {
+    "worker": "./dist/worker.js"
+  },
+  "instanceConfigSchema": {
+    "type": "object",
+    "properties": {
+      "minimumSampleSize": {
+        "type": "number",
+        "title": "Minimum Sample Size",
+        "description": "Minimum number of observations before computing statistics",
+        "default": 30
+      },
+      "significanceLevel": {
+        "type": "number",
+        "title": "Significance Level",
+        "description": "P-value threshold for experiment significance (e.g. 0.05)",
+        "default": 0.05
+      },
+      "scorecardWindowDays": {
+        "type": "number",
+        "title": "Scorecard Window (days)",
+        "description": "Number of days to include in performance scorecard",
+        "default": 30
+      },
+      "autoEvolveEnabled": {
+        "type": "boolean",
+        "title": "Auto-Evolve Playbooks",
+        "description": "Automatically generate playbook evolution recommendations",
+        "default": false
+      }
+    }
+  },
+  "jobs": [
+    {
+      "jobKey": "meta-weekly-scorecard",
+      "displayName": "Weekly Agent Scorecard",
+      "description": "Weekly performance scoring for all tracked agents.",
+      "schedule": "0 9 * * 1"
+    },
+    {
+      "jobKey": "meta-monthly-evolution",
+      "displayName": "Monthly Playbook Evolution",
+      "description": "Monthly playbook evolution recommendations based on accumulated learnings.",
+      "schedule": "0 10 1 * *"
+    }
+  ],
+  "tools": [
+    {
+      "name": "meta_track_outcome",
+      "displayName": "Track Outcome",
+      "description": "Record an outcome (campaign ROAS, content engagement, etc.) linked to the agent and prompt that produced it.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "agentId": { "type": "string", "description": "ID of the agent that produced this outcome" },
+          "outcomeType": { "type": "string", "enum": ["campaign_roas", "content_engagement", "conversion_rate", "quality_score", "task_completion", "custom"], "description": "Type of outcome" },
+          "value": { "type": "number", "description": "Numeric outcome value" },
+          "metadata": { "type": "object", "description": "Additional context (prompt hash, campaign ID, etc.)" },
+          "promptSnippet": { "type": "string", "description": "Key instruction/prompt text that produced this outcome" },
+          "latencyMs": { "type": "number", "description": "Time taken to produce the outcome in milliseconds" },
+          "costUsd": { "type": "number", "description": "Estimated cost in USD for this run" }
+        },
+        "required": ["agentId", "outcomeType", "value"]
+      }
+    },
+    {
+      "name": "meta_agent_scorecard",
+      "displayName": "Agent Scorecard",
+      "description": "Get performance scorecard for an agent: success rate, quality scores, speed, cost efficiency.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "agentId": { "type": "string", "description": "Agent ID to score" },
+          "windowDays": { "type": "number", "default": 30, "description": "Number of days to include" }
+        },
+        "required": ["agentId"]
+      }
+    },
+    {
+      "name": "meta_prompt_effectiveness",
+      "displayName": "Prompt Effectiveness",
+      "description": "Analyze which instruction patterns produce the best results across all tracked outcomes.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "agentId": { "type": "string", "description": "Filter to a specific agent (optional)" },
+          "outcomeType": { "type": "string", "description": "Filter to a specific outcome type (optional)" },
+          "topN": { "type": "number", "default": 10, "description": "Number of top patterns to return" }
+        }
+      }
+    },
+    {
+      "name": "meta_suggest_improvements",
+      "displayName": "Suggest Improvements",
+      "description": "Suggest specific instruction/prompt changes for an underperforming agent based on historical data.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "agentId": { "type": "string", "description": "Agent ID to improve" },
+          "focusArea": { "type": "string", "enum": ["quality", "speed", "cost", "success_rate", "all"], "default": "all" }
+        },
+        "required": ["agentId"]
+      }
+    },
+    {
+      "name": "meta_track_experiment",
+      "displayName": "Track Experiment",
+      "description": "Register an A/B experiment comparing old approach vs new for a given agent.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "experimentId": { "type": "string", "description": "Unique experiment identifier" },
+          "agentId": { "type": "string", "description": "Agent being experimented on" },
+          "hypothesis": { "type": "string", "description": "What you expect to happen" },
+          "controlDescription": { "type": "string", "description": "Description of the control (old) approach" },
+          "treatmentDescription": { "type": "string", "description": "Description of the treatment (new) approach" },
+          "primaryMetric": { "type": "string", "description": "Primary metric to evaluate (e.g. conversion_rate)" },
+          "targetSampleSize": { "type": "number", "default": 100, "description": "Target observations per arm" }
+        },
+        "required": ["experimentId", "agentId", "hypothesis", "controlDescription", "treatmentDescription", "primaryMetric"]
+      }
+    },
+    {
+      "name": "meta_experiment_results",
+      "displayName": "Experiment Results",
+      "description": "Get experiment results with statistical significance testing.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "experimentId": { "type": "string", "description": "Experiment ID to check" }
+        },
+        "required": ["experimentId"]
+      }
+    },
+    {
+      "name": "meta_benchmark_report",
+      "displayName": "Benchmark Report",
+      "description": "Generate a benchmark report comparing current agent performance vs historical baselines and targets.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "agentIds": { "type": "array", "items": { "type": "string" }, "description": "Agent IDs to include (default: all)" },
+          "compareWindowDays": { "type": "number", "default": 30, "description": "Current window to measure" },
+          "baselineWindowDays": { "type": "number", "default": 90, "description": "Historical baseline window" }
+        }
+      }
+    },
+    {
+      "name": "meta_evolve_playbook",
+      "displayName": "Evolve Playbook",
+      "description": "Generate updated skill/instruction recommendations based on accumulated learnings and experiment results.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "agentId": { "type": "string", "description": "Agent ID to evolve playbook for" },
+          "currentPlaybook": { "type": "string", "description": "Current instruction/playbook text to improve" },
+          "maxSuggestions": { "type": "number", "default": 5 }
+        },
+        "required": ["agentId"]
+      }
+    }
+  ]
+}

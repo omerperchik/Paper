@@ -1,0 +1,201 @@
+{
+  "id": "paperclip.competitive-intel",
+  "apiVersion": 1,
+  "version": "0.1.0",
+  "displayName": "Competitive Intelligence",
+  "description": "Track competitors, monitor pricing and website changes, analyze keyword and content gaps, estimate share of voice, and generate comprehensive competitive intelligence reports.",
+  "author": "Paperclip",
+  "categories": ["automation", "connector"],
+  "capabilities": [
+    "agent.tools.register",
+    "events.subscribe",
+    "events.emit",
+    "jobs.schedule",
+    "http.outbound",
+    "secrets.read-ref",
+    "plugin.state.read",
+    "plugin.state.write",
+    "activity.log.write",
+    "metrics.write"
+  ],
+  "entrypoints": {
+    "worker": "./dist/worker.js"
+  },
+  "instanceConfigSchema": {
+    "type": "object",
+    "properties": {
+      "ownDomain": {
+        "type": "string",
+        "title": "Your Domain",
+        "description": "Your own website domain for comparison (e.g. example.com)"
+      },
+      "serpApiKeyRef": {
+        "type": "string",
+        "title": "SERP API Key (secret ref)",
+        "description": "Secret reference for a SERP API key used for keyword analysis"
+      },
+      "metaAdLibraryTokenRef": {
+        "type": "string",
+        "title": "Meta Ad Library Token (secret ref)",
+        "description": "Secret reference for Meta Ad Library access token"
+      },
+      "scanDepth": {
+        "type": "number",
+        "title": "Website Scan Depth",
+        "description": "Maximum number of pages to crawl per competitor site",
+        "default": 20
+      },
+      "alertOnPriceChange": {
+        "type": "boolean",
+        "title": "Alert on Pricing Changes",
+        "description": "Emit an event when a competitor changes pricing",
+        "default": true
+      }
+    }
+  },
+  "jobs": [
+    {
+      "jobKey": "competitor-daily-scan",
+      "displayName": "Daily Competitor Scan",
+      "description": "Daily website and pricing scan of all tracked competitors.",
+      "schedule": "0 6 * * *"
+    },
+    {
+      "jobKey": "competitor-weekly-report",
+      "displayName": "Weekly Competitive Report",
+      "description": "Weekly competitive intelligence summary across all tracked competitors.",
+      "schedule": "0 9 * * 1"
+    }
+  ],
+  "tools": [
+    {
+      "name": "competitive_add_competitor",
+      "displayName": "Add Competitor",
+      "description": "Add a competitor to tracking (name, domain) and perform an initial scan.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "description": "Competitor company name" },
+          "domain": { "type": "string", "description": "Competitor website domain (e.g. competitor.com)" },
+          "notes": { "type": "string", "description": "Optional notes about this competitor" }
+        },
+        "required": ["name", "domain"]
+      }
+    },
+    {
+      "name": "competitive_remove_competitor",
+      "displayName": "Remove Competitor",
+      "description": "Remove a competitor from tracking.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "competitorId": { "type": "string", "description": "ID of the competitor to remove" }
+        },
+        "required": ["competitorId"]
+      }
+    },
+    {
+      "name": "competitive_list_competitors",
+      "displayName": "List Competitors",
+      "description": "List all tracked competitors with their latest data summaries.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "includeSnapshots": { "type": "boolean", "default": false, "description": "Include latest snapshot data" }
+        }
+      }
+    },
+    {
+      "name": "competitive_scan_website",
+      "displayName": "Scan Competitor Website",
+      "description": "Full scan of a competitor website: meta tags, headings, features, pricing page, tech stack.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "competitorId": { "type": "string", "description": "ID of the competitor to scan" },
+          "pages": { "type": "array", "items": { "type": "string" }, "description": "Specific pages to scan (paths). Defaults to homepage + /pricing + /features." }
+        },
+        "required": ["competitorId"]
+      }
+    },
+    {
+      "name": "competitive_scan_ads",
+      "displayName": "Scan Competitor Ads",
+      "description": "Scan Meta Ad Library for competitor ads. Returns active ad creatives and estimated spend.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "competitorId": { "type": "string", "description": "ID of the competitor" },
+          "platform": { "type": "string", "enum": ["meta", "google"], "default": "meta" },
+          "limit": { "type": "number", "default": 25 }
+        },
+        "required": ["competitorId"]
+      }
+    },
+    {
+      "name": "competitive_keyword_gap",
+      "displayName": "Keyword Gap Analysis",
+      "description": "Find keywords competitors rank for that you do not, identifying ranking opportunities.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "competitorIds": { "type": "array", "items": { "type": "string" }, "description": "Competitor IDs to compare against" },
+          "limit": { "type": "number", "default": 50, "description": "Max keywords to return" },
+          "minVolume": { "type": "number", "default": 100, "description": "Minimum monthly search volume" }
+        },
+        "required": ["competitorIds"]
+      }
+    },
+    {
+      "name": "competitive_content_gap",
+      "displayName": "Content Gap Analysis",
+      "description": "Find content topics competitors cover that you do not.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "competitorIds": { "type": "array", "items": { "type": "string" }, "description": "Competitor IDs to compare against" },
+          "contentTypes": { "type": "array", "items": { "type": "string", "enum": ["blog", "docs", "guides", "case_studies", "comparisons"] }, "description": "Types of content to analyze" }
+        },
+        "required": ["competitorIds"]
+      }
+    },
+    {
+      "name": "competitive_share_of_voice",
+      "displayName": "Share of Voice",
+      "description": "Estimate share of voice in search results for a set of target keywords.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "keywords": { "type": "array", "items": { "type": "string" }, "description": "Keywords to check share of voice for" },
+          "competitorIds": { "type": "array", "items": { "type": "string" }, "description": "Competitor IDs to include" }
+        },
+        "required": ["keywords"]
+      }
+    },
+    {
+      "name": "competitive_price_changes",
+      "displayName": "Pricing Change History",
+      "description": "Get pricing change history for a competitor over time.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "competitorId": { "type": "string", "description": "Competitor ID" },
+          "lookbackDays": { "type": "number", "default": 90 }
+        },
+        "required": ["competitorId"]
+      }
+    },
+    {
+      "name": "competitive_full_report",
+      "displayName": "Full Competitive Report",
+      "description": "Generate a comprehensive competitive intelligence report covering all tracked competitors.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "competitorIds": { "type": "array", "items": { "type": "string" }, "description": "Filter to specific competitors (default: all)" },
+          "sections": { "type": "array", "items": { "type": "string", "enum": ["overview", "pricing", "features", "content", "seo", "ads", "changes"] }, "description": "Report sections to include (default: all)" }
+        }
+      }
+    }
+  ]
+}

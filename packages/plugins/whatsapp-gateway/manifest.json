@@ -1,0 +1,280 @@
+{
+  "id": "paperclip.whatsapp-gateway",
+  "apiVersion": 1,
+  "version": "0.1.0",
+  "displayName": "WhatsApp Gateway",
+  "description": "Communication backbone for the Paper marketing platform. Routes all human communication — questions, approvals, dashboards, commands — through WhatsApp.",
+  "author": "Paperclip",
+  "categories": ["connector", "automation"],
+  "capabilities": [
+    "agent.tools.register",
+    "events.subscribe",
+    "events.emit",
+    "http.outbound",
+    "http.inbound",
+    "secrets.read-ref",
+    "plugin.state.read",
+    "plugin.state.write",
+    "activity.log.write",
+    "metrics.write",
+    "issues.read",
+    "issues.create",
+    "issues.update",
+    "agents.read",
+    "projects.read",
+    "companies.read"
+  ],
+  "entrypoints": {
+    "worker": "./dist/worker.js"
+  },
+  "instanceConfigSchema": {
+    "type": "object",
+    "properties": {
+      "whatsappPhoneNumberId": {
+        "type": "string",
+        "title": "WhatsApp Phone Number ID",
+        "description": "The Phone Number ID from the WhatsApp Business API dashboard"
+      },
+      "whatsappAccessTokenRef": {
+        "type": "string",
+        "title": "WhatsApp Access Token (secret ref)",
+        "description": "Secret reference for the WhatsApp Cloud API permanent access token"
+      },
+      "whatsappVerifyToken": {
+        "type": "string",
+        "title": "WhatsApp Webhook Verify Token",
+        "description": "Token used to verify the webhook subscription handshake"
+      },
+      "whatsappBusinessAccountId": {
+        "type": "string",
+        "title": "WhatsApp Business Account ID",
+        "description": "The WABA ID from Meta Business Manager"
+      },
+      "chairmanPhoneNumber": {
+        "type": "string",
+        "title": "Chairman Phone Number",
+        "description": "The chairman's WhatsApp number in international format (e.g. 972501234567)"
+      },
+      "webhookUrl": {
+        "type": "string",
+        "title": "Webhook URL",
+        "description": "Public URL where WhatsApp will send inbound message webhooks"
+      }
+    },
+    "required": [
+      "whatsappPhoneNumberId",
+      "whatsappAccessTokenRef",
+      "whatsappVerifyToken",
+      "chairmanPhoneNumber"
+    ]
+  },
+  "webhooks": [
+    {
+      "path": "/whatsapp/inbound",
+      "methods": ["GET", "POST"],
+      "description": "Handles WhatsApp Cloud API webhook verification (GET) and inbound message processing (POST)"
+    }
+  ],
+  "tools": [
+    {
+      "name": "whatsapp_send_message",
+      "displayName": "Send WhatsApp Message",
+      "description": "Send a text or template message to the chairman via WhatsApp.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "The text message to send"
+          },
+          "to": {
+            "type": "string",
+            "description": "Recipient phone number. Defaults to chairman if omitted."
+          },
+          "templateName": {
+            "type": "string",
+            "description": "Optional WhatsApp template name to use instead of plain text"
+          },
+          "templateParams": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Template parameter values"
+          }
+        },
+        "required": ["message"]
+      }
+    },
+    {
+      "name": "whatsapp_ask_chairman",
+      "displayName": "Ask Chairman via WhatsApp",
+      "description": "Send a question to the chairman via WhatsApp and wait for their reply. The reply is routed back to the calling agent's task as a comment.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "question": {
+            "type": "string",
+            "description": "The question to ask the chairman"
+          },
+          "context": {
+            "type": "string",
+            "description": "Additional context to include with the question"
+          },
+          "taskId": {
+            "type": "string",
+            "description": "The task/issue ID to post the reply back to"
+          },
+          "agentId": {
+            "type": "string",
+            "description": "The ID of the agent asking the question"
+          },
+          "urgency": {
+            "type": "string",
+            "enum": ["low", "normal", "high", "critical"],
+            "default": "normal"
+          },
+          "timeoutMinutes": {
+            "type": "number",
+            "default": 60,
+            "description": "How long to wait for a reply before timing out"
+          }
+        },
+        "required": ["question", "taskId", "agentId"]
+      }
+    },
+    {
+      "name": "whatsapp_request_approval",
+      "displayName": "Request Approval via WhatsApp",
+      "description": "Send an approval request to the chairman with interactive Approve/Reject/Question buttons.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Short title for the approval request"
+          },
+          "description": {
+            "type": "string",
+            "description": "Detailed description of what is being approved"
+          },
+          "taskId": {
+            "type": "string",
+            "description": "The task/issue ID this approval relates to"
+          },
+          "agentId": {
+            "type": "string",
+            "description": "The agent requesting approval"
+          },
+          "approvalType": {
+            "type": "string",
+            "enum": ["spend", "publish", "strategy", "hire", "general"],
+            "default": "general"
+          },
+          "amount": {
+            "type": "number",
+            "description": "Dollar amount if this is a spend approval"
+          },
+          "metadata": {
+            "type": "object",
+            "description": "Additional metadata to store with the approval"
+          }
+        },
+        "required": ["title", "description", "taskId", "agentId"]
+      }
+    },
+    {
+      "name": "whatsapp_send_dashboard",
+      "displayName": "Send Dashboard via WhatsApp",
+      "description": "Send a formatted KPI dashboard summary to the chairman via WhatsApp.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "dashboardType": {
+            "type": "string",
+            "enum": ["daily", "weekly", "campaign", "cac", "custom"],
+            "default": "daily"
+          },
+          "title": {
+            "type": "string",
+            "description": "Dashboard title"
+          },
+          "metrics": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": { "type": "string" },
+                "value": { "type": "string" },
+                "change": { "type": "string" },
+                "status": { "type": "string", "enum": ["up", "down", "flat", "alert"] }
+              },
+              "required": ["label", "value"]
+            },
+            "description": "KPI metrics to display"
+          },
+          "sections": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "heading": { "type": "string" },
+                "rows": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "label": { "type": "string" },
+                      "value": { "type": "string" }
+                    }
+                  }
+                }
+              }
+            },
+            "description": "Additional sections with label-value rows"
+          },
+          "summary": {
+            "type": "string",
+            "description": "A brief text summary or analysis"
+          }
+        },
+        "required": ["dashboardType", "metrics"]
+      }
+    },
+    {
+      "name": "whatsapp_send_notification",
+      "displayName": "Send WhatsApp Notification",
+      "description": "Send a typed notification/alert to the chairman via WhatsApp.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "notificationType": {
+            "type": "string",
+            "enum": ["info", "warning", "error", "success", "budget_alert", "agent_error", "milestone"],
+            "default": "info"
+          },
+          "title": {
+            "type": "string",
+            "description": "Notification title"
+          },
+          "body": {
+            "type": "string",
+            "description": "Notification body text"
+          },
+          "taskId": {
+            "type": "string",
+            "description": "Related task/issue ID if applicable"
+          },
+          "agentId": {
+            "type": "string",
+            "description": "The agent sending the notification"
+          },
+          "actionRequired": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether the chairman needs to take action"
+          }
+        },
+        "required": ["notificationType", "title", "body"]
+      }
+    }
+  ]
+}

@@ -11,6 +11,14 @@ import { registerChannelTools } from "./tools/channels.js";
 import { registerCacTools } from "./tools/cac-tracker.js";
 import { registerBrowserTools } from "./tools/browser.js";
 import { registerOutreachTools } from "./tools/outreach.js";
+import { registerGoogleAdsApiTools } from "./tools/google-ads-api.js";
+import { registerMetaAdsApiTools } from "./tools/meta-ads-api.js";
+import { registerGoogleAnalyticsApiTools } from "./tools/google-analytics-api.js";
+import { registerStripeApiTools } from "./tools/stripe-api.js";
+import { registerSocialApiTools } from "./tools/social-apis.js";
+import { registerGscApiTools } from "./tools/gsc-api.js";
+import { registerContentPipelineTools } from "./tools/content-pipeline.js";
+import { registerCampaignExecutorTools } from "./tools/campaign-executor.js";
 import { CostTracker } from "./services/cost-tracker.js";
 
 const plugin = definePlugin({
@@ -27,6 +35,16 @@ const plugin = definePlugin({
     registerCacTools(ctx, costTracker);
     registerBrowserTools(ctx);
     registerOutreachTools(ctx);
+
+    // API integration tools (real platform APIs)
+    registerGoogleAdsApiTools(ctx);
+    registerMetaAdsApiTools(ctx);
+    registerGoogleAnalyticsApiTools(ctx);
+    registerStripeApiTools(ctx);
+    registerSocialApiTools(ctx);
+    registerGscApiTools(ctx);
+    registerContentPipelineTools(ctx);
+    registerCampaignExecutorTools(ctx);
 
     // Listen for relevant events
     ctx.events.on("issue.created", async (event) => {

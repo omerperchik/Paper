@@ -111,6 +111,102 @@
         "description": "Additional words to flag in humanizer check",
         "items": { "type": "string" },
         "default": []
+      },
+      "googleAdsAccessToken": {
+        "type": "string",
+        "title": "Google Ads OAuth Access Token (secret ref)"
+      },
+      "googleAdsRefreshToken": {
+        "type": "string",
+        "title": "Google Ads OAuth Refresh Token (secret ref)"
+      },
+      "googleAdsCustomerId": {
+        "type": "string",
+        "title": "Google Ads Customer ID (no dashes)"
+      },
+      "googleAdsDeveloperToken": {
+        "type": "string",
+        "title": "Google Ads Developer Token (secret ref)"
+      },
+      "metaAdsAccessToken": {
+        "type": "string",
+        "title": "Meta Ads Access Token (secret ref)"
+      },
+      "metaPageId": {
+        "type": "string",
+        "title": "Meta/Facebook Page ID"
+      },
+      "ga4AccessToken": {
+        "type": "string",
+        "title": "GA4 OAuth Access Token (secret ref)"
+      },
+      "ga4PropertyId": {
+        "type": "string",
+        "title": "GA4 Property ID"
+      },
+      "stripeSecretKey": {
+        "type": "string",
+        "title": "Stripe Secret Key (secret ref)"
+      },
+      "twitterBearerToken": {
+        "type": "string",
+        "title": "Twitter/X Bearer Token (secret ref)"
+      },
+      "twitterAccessToken": {
+        "type": "string",
+        "title": "Twitter/X OAuth 2.0 User Access Token (secret ref)"
+      },
+      "twitterAccessSecret": {
+        "type": "string",
+        "title": "Twitter/X Access Token Secret (secret ref)"
+      },
+      "twitterApiKey": {
+        "type": "string",
+        "title": "Twitter/X API Key (secret ref)"
+      },
+      "twitterApiSecret": {
+        "type": "string",
+        "title": "Twitter/X API Secret (secret ref)"
+      },
+      "linkedinAccessToken": {
+        "type": "string",
+        "title": "LinkedIn OAuth Access Token (secret ref)"
+      },
+      "linkedinAuthorUrn": {
+        "type": "string",
+        "title": "LinkedIn Author URN (e.g. urn:li:person:xxx or urn:li:organization:xxx)"
+      },
+      "instagramAccessToken": {
+        "type": "string",
+        "title": "Instagram/Facebook Graph API Access Token (secret ref)"
+      },
+      "instagramBusinessAccountId": {
+        "type": "string",
+        "title": "Instagram Business Account ID"
+      },
+      "gscAccessToken": {
+        "type": "string",
+        "title": "Google Search Console OAuth Access Token (secret ref)"
+      },
+      "wordpressUrl": {
+        "type": "string",
+        "title": "WordPress Site URL (e.g. https://example.com)"
+      },
+      "wordpressUsername": {
+        "type": "string",
+        "title": "WordPress Username (secret ref)"
+      },
+      "wordpressAppPassword": {
+        "type": "string",
+        "title": "WordPress Application Password (secret ref)"
+      },
+      "ghostUrl": {
+        "type": "string",
+        "title": "Ghost CMS URL"
+      },
+      "ghostAdminApiKey": {
+        "type": "string",
+        "title": "Ghost Admin API Key (secret ref, format: id:secret)"
       }
     }
   },
@@ -606,6 +702,701 @@
           "comment": { "type": "string" }
         },
         "required": ["postId", "subreddit", "comment"]
+      }
+    },
+    {
+      "name": "marketing_google_ads_list_campaigns",
+      "displayName": "Google Ads — List Campaigns",
+      "description": "List Google Ads campaigns with performance metrics via the Google Ads API v18.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "dateFrom": { "type": "string", "description": "Start date YYYY-MM-DD" },
+          "dateTo": { "type": "string", "description": "End date YYYY-MM-DD" },
+          "status": { "type": "string", "enum": ["ENABLED", "PAUSED", "REMOVED"] },
+          "limit": { "type": "number", "default": 100 }
+        }
+      }
+    },
+    {
+      "name": "marketing_google_ads_create_campaign",
+      "displayName": "Google Ads — Create Campaign",
+      "description": "Create a new Google Ads search or display campaign with budget and bidding strategy.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "channelType": { "type": "string", "enum": ["SEARCH", "DISPLAY", "SHOPPING", "VIDEO", "PERFORMANCE_MAX"], "default": "SEARCH" },
+          "budgetAmountMicros": { "type": "number", "description": "Daily budget in micros (1 USD = 1000000)" },
+          "biddingStrategy": { "type": "string", "enum": ["MAXIMIZE_CONVERSIONS", "MAXIMIZE_CLICKS", "TARGET_CPA", "TARGET_ROAS", "MANUAL_CPC"], "default": "MAXIMIZE_CONVERSIONS" },
+          "startDate": { "type": "string", "description": "YYYY-MM-DD" },
+          "endDate": { "type": "string", "description": "YYYY-MM-DD" },
+          "targetCpaMicros": { "type": "number" }
+        },
+        "required": ["name", "budgetAmountMicros"]
+      }
+    },
+    {
+      "name": "marketing_google_ads_update_campaign",
+      "displayName": "Google Ads — Update Campaign",
+      "description": "Update an existing Google Ads campaign (budget, bids, status, name).",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "campaignId": { "type": "string" },
+          "name": { "type": "string" },
+          "status": { "type": "string", "enum": ["ENABLED", "PAUSED", "REMOVED"] },
+          "budgetAmountMicros": { "type": "number" },
+          "targetCpaMicros": { "type": "number" }
+        },
+        "required": ["campaignId"]
+      }
+    },
+    {
+      "name": "marketing_google_ads_pause_campaign",
+      "displayName": "Google Ads — Pause Campaign",
+      "description": "Pause a specific Google Ads campaign.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "campaignId": { "type": "string" }
+        },
+        "required": ["campaignId"]
+      }
+    },
+    {
+      "name": "marketing_google_ads_get_keywords",
+      "displayName": "Google Ads — Get Keyword Performance",
+      "description": "Get keyword performance data from Google Ads including quality score, impressions, clicks.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "campaignId": { "type": "string" },
+          "adGroupId": { "type": "string" },
+          "dateFrom": { "type": "string" },
+          "dateTo": { "type": "string" },
+          "limit": { "type": "number", "default": 100 }
+        },
+        "required": ["dateFrom", "dateTo"]
+      }
+    },
+    {
+      "name": "marketing_google_ads_add_keywords",
+      "displayName": "Google Ads — Add Keywords",
+      "description": "Add keywords to a Google Ads ad group.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "adGroupId": { "type": "string" },
+          "keywords": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "text": { "type": "string" },
+                "matchType": { "type": "string", "enum": ["EXACT", "PHRASE", "BROAD"], "default": "BROAD" },
+                "cpcBidMicros": { "type": "number" }
+              },
+              "required": ["text"]
+            }
+          }
+        },
+        "required": ["adGroupId", "keywords"]
+      }
+    },
+    {
+      "name": "marketing_meta_ads_list_campaigns",
+      "displayName": "Meta Ads — List Campaigns",
+      "description": "List Meta/Facebook ad campaigns via the Marketing API v21.0.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "enum": ["ACTIVE", "PAUSED", "ARCHIVED"] },
+          "limit": { "type": "number", "default": 50 },
+          "fields": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    {
+      "name": "marketing_meta_ads_create_campaign",
+      "displayName": "Meta Ads — Create Campaign",
+      "description": "Create a Meta/Facebook ad campaign with objective and budget.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "objective": { "type": "string", "enum": ["OUTCOME_AWARENESS", "OUTCOME_ENGAGEMENT", "OUTCOME_LEADS", "OUTCOME_SALES", "OUTCOME_TRAFFIC", "OUTCOME_APP_PROMOTION"] },
+          "status": { "type": "string", "enum": ["ACTIVE", "PAUSED"], "default": "PAUSED" },
+          "specialAdCategories": { "type": "array", "items": { "type": "string" } },
+          "dailyBudget": { "type": "number", "description": "Daily budget in account currency" },
+          "lifetimeBudget": { "type": "number" },
+          "bidStrategy": { "type": "string", "enum": ["LOWEST_COST_WITHOUT_CAP", "LOWEST_COST_WITH_BID_CAP", "COST_CAP"] }
+        },
+        "required": ["name", "objective"]
+      }
+    },
+    {
+      "name": "marketing_meta_ads_create_adset",
+      "displayName": "Meta Ads — Create Ad Set",
+      "description": "Create a Meta ad set with targeting, budget, and optimization settings.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "campaignId": { "type": "string" },
+          "dailyBudget": { "type": "number" },
+          "lifetimeBudget": { "type": "number" },
+          "billingEvent": { "type": "string", "enum": ["IMPRESSIONS", "LINK_CLICKS", "POST_ENGAGEMENT"], "default": "IMPRESSIONS" },
+          "optimizationGoal": { "type": "string", "enum": ["REACH", "IMPRESSIONS", "LINK_CLICKS", "LANDING_PAGE_VIEWS", "CONVERSIONS", "LEAD_GENERATION"], "default": "REACH" },
+          "startTime": { "type": "string" },
+          "endTime": { "type": "string" },
+          "targeting": {
+            "type": "object",
+            "description": "Meta targeting spec (geo_locations, age_min, age_max, genders, interests, etc.)"
+          },
+          "status": { "type": "string", "enum": ["ACTIVE", "PAUSED"], "default": "PAUSED" }
+        },
+        "required": ["name", "campaignId", "targeting"]
+      }
+    },
+    {
+      "name": "marketing_meta_ads_create_ad",
+      "displayName": "Meta Ads — Create Ad",
+      "description": "Create a Meta ad with creative (inline or existing creative ID).",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "adsetId": { "type": "string" },
+          "creativeId": { "type": "string", "description": "Existing creative ID (if not using inline)" },
+          "headline": { "type": "string" },
+          "body": { "type": "string" },
+          "linkUrl": { "type": "string" },
+          "imageUrl": { "type": "string" },
+          "callToAction": { "type": "string", "enum": ["LEARN_MORE", "SHOP_NOW", "SIGN_UP", "DOWNLOAD", "GET_OFFER", "BOOK_NOW", "CONTACT_US"], "default": "LEARN_MORE" },
+          "status": { "type": "string", "enum": ["ACTIVE", "PAUSED"], "default": "PAUSED" }
+        },
+        "required": ["name", "adsetId"]
+      }
+    },
+    {
+      "name": "marketing_meta_ads_update_campaign",
+      "displayName": "Meta Ads — Update Campaign",
+      "description": "Update an existing Meta/Facebook ad campaign.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "campaignId": { "type": "string" },
+          "name": { "type": "string" },
+          "status": { "type": "string", "enum": ["ACTIVE", "PAUSED", "ARCHIVED"] },
+          "dailyBudget": { "type": "number" },
+          "lifetimeBudget": { "type": "number" },
+          "bidStrategy": { "type": "string" }
+        },
+        "required": ["campaignId"]
+      }
+    },
+    {
+      "name": "marketing_meta_ads_pause_campaign",
+      "displayName": "Meta Ads — Pause Campaign",
+      "description": "Pause a specific Meta/Facebook ad campaign.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "campaignId": { "type": "string" }
+        },
+        "required": ["campaignId"]
+      }
+    },
+    {
+      "name": "marketing_meta_ads_get_insights",
+      "displayName": "Meta Ads — Get Insights",
+      "description": "Get performance insights for a Meta campaign, ad set, or ad.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "objectId": { "type": "string", "description": "Campaign, ad set, or ad ID" },
+          "level": { "type": "string", "enum": ["campaign", "adset", "ad"], "default": "campaign" },
+          "dateFrom": { "type": "string" },
+          "dateTo": { "type": "string" },
+          "fields": { "type": "array", "items": { "type": "string" } },
+          "breakdowns": { "type": "array", "items": { "type": "string", "enum": ["age", "gender", "country", "region", "platform_position", "device_platform", "publisher_platform"] } },
+          "timeIncrement": { "type": "string", "description": "1 for daily, 7 for weekly, monthly, etc." }
+        },
+        "required": ["objectId", "dateFrom", "dateTo"]
+      }
+    },
+    {
+      "name": "marketing_ga4_run_report",
+      "displayName": "GA4 — Run Custom Report",
+      "description": "Run a custom Google Analytics 4 report with arbitrary dimensions and metrics.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "dateFrom": { "type": "string" },
+          "dateTo": { "type": "string" },
+          "dimensions": { "type": "array", "items": { "type": "string" }, "description": "GA4 dimension names (e.g. sessionSource, country, pagePath)" },
+          "metrics": { "type": "array", "items": { "type": "string" }, "description": "GA4 metric names (e.g. sessions, totalUsers, conversions)" },
+          "dimensionFilter": { "type": "object" },
+          "metricFilter": { "type": "object" },
+          "orderBys": { "type": "array", "items": { "type": "object" } },
+          "limit": { "type": "number", "default": 1000 }
+        },
+        "required": ["dateFrom", "dateTo", "dimensions", "metrics"]
+      }
+    },
+    {
+      "name": "marketing_ga4_get_traffic",
+      "displayName": "GA4 — Get Traffic by Source",
+      "description": "Get website traffic broken down by source, medium, and campaign from GA4.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "dateFrom": { "type": "string" },
+          "dateTo": { "type": "string" },
+          "limit": { "type": "number", "default": 100 }
+        },
+        "required": ["dateFrom", "dateTo"]
+      }
+    },
+    {
+      "name": "marketing_ga4_get_conversions",
+      "displayName": "GA4 — Get Conversions",
+      "description": "Get conversion event data from GA4 by event name and source.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "dateFrom": { "type": "string" },
+          "dateTo": { "type": "string" },
+          "eventNames": { "type": "array", "items": { "type": "string" }, "description": "Filter to specific conversion events" },
+          "limit": { "type": "number", "default": 100 }
+        },
+        "required": ["dateFrom", "dateTo"]
+      }
+    },
+    {
+      "name": "marketing_ga4_get_user_demographics",
+      "displayName": "GA4 — Get User Demographics",
+      "description": "Get user demographic data from GA4 (country, age, gender, device, language).",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "dateFrom": { "type": "string" },
+          "dateTo": { "type": "string" },
+          "limit": { "type": "number", "default": 100 }
+        },
+        "required": ["dateFrom", "dateTo"]
+      }
+    },
+    {
+      "name": "marketing_ga4_get_realtime",
+      "displayName": "GA4 — Get Realtime Data",
+      "description": "Get realtime active user data from GA4.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "dimensions": { "type": "array", "items": { "type": "string" } },
+          "metrics": { "type": "array", "items": { "type": "string" } },
+          "limit": { "type": "number", "default": 100 }
+        }
+      }
+    },
+    {
+      "name": "marketing_stripe_get_revenue",
+      "displayName": "Stripe — Get Revenue",
+      "description": "Get MRR, total revenue, and revenue by period from Stripe.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "dateFrom": { "type": "string" },
+          "dateTo": { "type": "string" },
+          "interval": { "type": "string", "enum": ["day", "week", "month"], "default": "month" }
+        },
+        "required": ["dateFrom", "dateTo"]
+      }
+    },
+    {
+      "name": "marketing_stripe_get_customers",
+      "displayName": "Stripe — Get Customers",
+      "description": "Get customer list from Stripe with estimated LTV and subscription data.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "limit": { "type": "number", "default": 100 },
+          "startingAfter": { "type": "string", "description": "Cursor for pagination" },
+          "email": { "type": "string" },
+          "createdAfter": { "type": "string", "description": "ISO date — only customers created after this" }
+        }
+      }
+    },
+    {
+      "name": "marketing_stripe_get_subscriptions",
+      "displayName": "Stripe — Get Subscriptions",
+      "description": "Get subscription metrics from Stripe including MRR and ARR.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "enum": ["active", "past_due", "canceled", "trialing", "all"] },
+          "limit": { "type": "number", "default": 100 },
+          "priceId": { "type": "string" }
+        }
+      }
+    },
+    {
+      "name": "marketing_stripe_calculate_ltv",
+      "displayName": "Stripe — Calculate LTV",
+      "description": "Calculate customer Lifetime Value by cohort or acquisition channel from Stripe data.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "cohortField": { "type": "string", "default": "created" },
+          "cohortInterval": { "type": "string", "enum": ["month", "quarter", "year"], "default": "month" },
+          "metadataGroupBy": { "type": "string", "description": "Group by a customer metadata field (e.g. acquisition_channel)" }
+        }
+      }
+    },
+    {
+      "name": "marketing_stripe_get_churn",
+      "displayName": "Stripe — Get Churn Rate",
+      "description": "Calculate subscription churn rate and retention from Stripe data.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "lookbackDays": { "type": "number", "default": 30 }
+        }
+      }
+    },
+    {
+      "name": "marketing_twitter_post",
+      "displayName": "Twitter/X — Post Tweet",
+      "description": "Post a tweet via the X API v2. Supports replies, media, and polls.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "text": { "type": "string", "maxLength": 280 },
+          "replyToId": { "type": "string" },
+          "mediaIds": { "type": "array", "items": { "type": "string" } },
+          "pollOptions": { "type": "array", "items": { "type": "string" }, "minItems": 2, "maxItems": 4 },
+          "pollDurationMinutes": { "type": "number", "default": 1440 }
+        },
+        "required": ["text"]
+      }
+    },
+    {
+      "name": "marketing_twitter_get_metrics",
+      "displayName": "Twitter/X — Get Metrics",
+      "description": "Get tweet and account metrics from X API v2.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "tweetIds": { "type": "array", "items": { "type": "string" } },
+          "userId": { "type": "string" },
+          "startTime": { "type": "string", "description": "ISO 8601 datetime" },
+          "endTime": { "type": "string", "description": "ISO 8601 datetime" },
+          "granularity": { "type": "string", "enum": ["day", "hour", "fifteen_min"], "default": "day" }
+        }
+      }
+    },
+    {
+      "name": "marketing_linkedin_post",
+      "displayName": "LinkedIn — Post",
+      "description": "Publish a post to LinkedIn via the REST API v2. Supports text, articles, and images.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "text": { "type": "string" },
+          "visibility": { "type": "string", "enum": ["PUBLIC", "CONNECTIONS"], "default": "PUBLIC" },
+          "mediaUrls": { "type": "array", "items": { "type": "string" } },
+          "articleUrl": { "type": "string" },
+          "articleTitle": { "type": "string" }
+        },
+        "required": ["text"]
+      }
+    },
+    {
+      "name": "marketing_linkedin_get_metrics",
+      "displayName": "LinkedIn — Get Metrics",
+      "description": "Get LinkedIn post and page metrics including followers, shares, and page views.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "organizationId": { "type": "string" },
+          "postUrn": { "type": "string" },
+          "startDate": { "type": "string" },
+          "endDate": { "type": "string" },
+          "timeGranularity": { "type": "string", "enum": ["DAY", "MONTH"], "default": "MONTH" }
+        }
+      }
+    },
+    {
+      "name": "marketing_instagram_post",
+      "displayName": "Instagram — Post",
+      "description": "Publish a photo, video, or reel to Instagram via the Graph API.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "imageUrl": { "type": "string" },
+          "videoUrl": { "type": "string" },
+          "caption": { "type": "string" },
+          "locationId": { "type": "string" },
+          "isReel": { "type": "boolean", "default": false }
+        },
+        "required": ["caption"]
+      }
+    },
+    {
+      "name": "marketing_instagram_get_metrics",
+      "displayName": "Instagram — Get Metrics",
+      "description": "Get Instagram post and account insights via the Graph API.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "mediaId": { "type": "string" },
+          "period": { "type": "string", "enum": ["day", "week", "days_28", "lifetime"], "default": "day" },
+          "metrics": { "type": "array", "items": { "type": "string" } },
+          "since": { "type": "string", "description": "Unix timestamp" },
+          "until": { "type": "string", "description": "Unix timestamp" }
+        }
+      }
+    },
+    {
+      "name": "marketing_gsc_get_performance",
+      "displayName": "GSC — Get Search Performance",
+      "description": "Get search performance data from Google Search Console (queries, clicks, impressions, CTR, position).",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "dateFrom": { "type": "string" },
+          "dateTo": { "type": "string" },
+          "dimensions": { "type": "array", "items": { "type": "string", "enum": ["query", "page", "country", "device", "date", "searchAppearance"] } },
+          "rowLimit": { "type": "number", "default": 1000 },
+          "startRow": { "type": "number", "default": 0 },
+          "dimensionFilterGroups": { "type": "array", "items": { "type": "object" } },
+          "type": { "type": "string", "enum": ["web", "image", "video", "news", "discover", "googleNews"], "default": "web" },
+          "dataState": { "type": "string", "enum": ["all", "final"], "default": "all" },
+          "aggregationType": { "type": "string", "enum": ["auto", "byPage", "byProperty"], "default": "auto" }
+        },
+        "required": ["dateFrom", "dateTo"]
+      }
+    },
+    {
+      "name": "marketing_gsc_get_sitemaps",
+      "displayName": "GSC — Get Sitemaps",
+      "description": "Get sitemap status from Google Search Console.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "sitemapUrl": { "type": "string", "description": "Specific sitemap URL to check, or omit for all" }
+        }
+      }
+    },
+    {
+      "name": "marketing_gsc_inspect_url",
+      "displayName": "GSC — Inspect URL",
+      "description": "Inspect a URL's indexing status in Google Search Console.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "inspectionUrl": { "type": "string" },
+          "languageCode": { "type": "string", "default": "en" }
+        },
+        "required": ["inspectionUrl"]
+      }
+    },
+    {
+      "name": "marketing_generate_content",
+      "displayName": "Generate Content Brief",
+      "description": "Generate a structured content brief for blog, social, email, or ad copy with tone, keywords, and guidelines.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "contentType": { "type": "string", "enum": ["blog", "social", "email", "ad_copy", "landing_page"] },
+          "topic": { "type": "string" },
+          "tone": { "type": "string", "default": "professional" },
+          "keywords": { "type": "array", "items": { "type": "string" } },
+          "targetLength": { "type": "number" },
+          "audience": { "type": "string" },
+          "outline": { "type": "array", "items": { "type": "string" } },
+          "instructions": { "type": "string" },
+          "brand": { "type": "string" }
+        },
+        "required": ["contentType", "topic"]
+      }
+    },
+    {
+      "name": "marketing_publish_to_wordpress",
+      "displayName": "Publish to WordPress",
+      "description": "Publish or draft a blog post to WordPress via the REST API.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string" },
+          "content": { "type": "string", "description": "HTML content" },
+          "status": { "type": "string", "enum": ["draft", "publish", "pending", "private"], "default": "draft" },
+          "excerpt": { "type": "string" },
+          "categories": { "type": "array", "items": { "type": "number" } },
+          "tags": { "type": "array", "items": { "type": "number" } },
+          "featuredMediaId": { "type": "number" },
+          "slug": { "type": "string" },
+          "format": { "type": "string", "default": "standard" },
+          "author": { "type": "number" }
+        },
+        "required": ["title", "content"]
+      }
+    },
+    {
+      "name": "marketing_publish_to_ghost",
+      "displayName": "Publish to Ghost",
+      "description": "Publish or draft a post to Ghost CMS via the Admin API.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string" },
+          "html": { "type": "string" },
+          "status": { "type": "string", "enum": ["draft", "published", "scheduled"], "default": "draft" },
+          "excerpt": { "type": "string" },
+          "tags": { "type": "array", "items": { "type": "object", "properties": { "name": { "type": "string" } }, "required": ["name"] } },
+          "featureImage": { "type": "string" },
+          "slug": { "type": "string" },
+          "published_at": { "type": "string" },
+          "featured": { "type": "boolean", "default": false }
+        },
+        "required": ["title", "html"]
+      }
+    },
+    {
+      "name": "marketing_schedule_email_sequence",
+      "displayName": "Schedule Email Sequence",
+      "description": "Create a multi-step email sequence in Brevo or Resend with delay-based scheduling.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "provider": { "type": "string", "enum": ["brevo", "resend"], "default": "brevo" },
+          "name": { "type": "string" },
+          "senderEmail": { "type": "string" },
+          "senderName": { "type": "string" },
+          "replyTo": { "type": "string" },
+          "emails": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "subject": { "type": "string" },
+                "htmlContent": { "type": "string" },
+                "delayDays": { "type": "number", "description": "Days after sequence start to send" },
+                "textContent": { "type": "string" }
+              },
+              "required": ["subject", "htmlContent", "delayDays"]
+            }
+          },
+          "listIds": { "type": "array", "items": { "type": "number" } },
+          "segmentIds": { "type": "array", "items": { "type": "number" } }
+        },
+        "required": ["name", "senderEmail", "senderName", "emails"]
+      }
+    },
+    {
+      "name": "marketing_publish_social_batch",
+      "displayName": "Publish Social Batch",
+      "description": "Publish content to multiple social platforms (Twitter, LinkedIn, Instagram) in one call.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "posts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "platform": { "type": "string", "enum": ["twitter", "linkedin", "instagram"] },
+                "text": { "type": "string" },
+                "mediaUrls": { "type": "array", "items": { "type": "string" } },
+                "articleUrl": { "type": "string" },
+                "articleTitle": { "type": "string" }
+              },
+              "required": ["platform", "text"]
+            }
+          }
+        },
+        "required": ["posts"]
+      }
+    },
+    {
+      "name": "marketing_auto_optimize_bids",
+      "displayName": "Auto-Optimize Bids",
+      "description": "AI-driven bid/budget adjustment based on ROAS targets. Supports dry-run mode.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "platform": { "type": "string", "enum": ["google_ads", "meta_ads"] },
+          "targetRoas": { "type": "number" },
+          "maxBidAdjustmentPercent": { "type": "number", "default": 25 },
+          "lookbackDays": { "type": "number", "default": 7 },
+          "dryRun": { "type": "boolean", "default": true }
+        },
+        "required": ["platform", "targetRoas"]
+      }
+    },
+    {
+      "name": "marketing_campaign_health_check",
+      "displayName": "Campaign Health Check",
+      "description": "Check all active campaigns across Google Ads and Meta Ads against performance thresholds.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "minRoas": { "type": "number", "default": 1.0 },
+          "maxCpa": { "type": "number" },
+          "maxCpc": { "type": "number" },
+          "minCtr": { "type": "number", "default": 0.5 },
+          "minConversionRate": { "type": "number" }
+        }
+      }
+    },
+    {
+      "name": "marketing_emergency_pause_all",
+      "displayName": "Emergency Pause All Campaigns",
+      "description": "Emergency pause all active campaigns across platforms for budget protection.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "reason": { "type": "string" },
+          "platforms": { "type": "array", "items": { "type": "string", "enum": ["google_ads", "meta_ads"] }, "default": ["google_ads", "meta_ads"] }
+        },
+        "required": ["reason"]
+      }
+    },
+    {
+      "name": "marketing_rebalance_budget",
+      "displayName": "Rebalance Budget",
+      "description": "Rebalance budget allocation across channels based on CAC or ROAS efficiency.",
+      "parametersSchema": {
+        "type": "object",
+        "properties": {
+          "totalBudget": { "type": "number" },
+          "channels": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": { "type": "string" },
+                "currentSpend": { "type": "number" },
+                "conversions": { "type": "number" },
+                "revenue": { "type": "number" },
+                "minBudget": { "type": "number" },
+                "maxBudget": { "type": "number" }
+              },
+              "required": ["name", "currentSpend", "conversions"]
+            }
+          },
+          "optimizeFor": { "type": "string", "enum": ["cac", "roas"], "default": "cac" },
+          "constraints": {
+            "type": "object",
+            "properties": {
+              "maxChannelPercent": { "type": "number", "default": 60 },
+              "minChannelPercent": { "type": "number", "default": 5 }
+            }
+          }
+        },
+        "required": ["totalBudget", "channels"]
       }
     }
   ]
