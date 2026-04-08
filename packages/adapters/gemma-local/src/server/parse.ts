@@ -43,7 +43,10 @@ export function parseChatCompletion(body: unknown): ParsedChatCompletion {
     const u = rec.usage as Record<string, unknown>;
     result.usage.inputTokens = safeInt(u.prompt_tokens) + safeInt(u.input_tokens);
     result.usage.outputTokens = safeInt(u.completion_tokens) + safeInt(u.output_tokens);
-    result.usage.cachedInputTokens = safeInt(u.cached_tokens) + safeInt(u.prompt_tokens_details?.cached_tokens);
+    const promptDetails = typeof u.prompt_tokens_details === "object" && u.prompt_tokens_details !== null
+      ? u.prompt_tokens_details as Record<string, unknown>
+      : null;
+    result.usage.cachedInputTokens = safeInt(u.cached_tokens) + safeInt(promptDetails?.cached_tokens);
   }
 
   // Choices

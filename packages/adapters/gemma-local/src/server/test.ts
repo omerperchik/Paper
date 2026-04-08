@@ -123,24 +123,7 @@ export async function testEnvironment(
       });
     }
 
-    // ---------- Hello probe: send a trivial prompt ----------
-    try {
-      const probeUrl = `${ollamaUrl.replace(/\/+$/, "")}/chat/completions`;
-      const probeBody = JSON.stringify({
-        model: ollamaModel,
-        messages: [{ role: "user", content: "Respond with hello." }],
-        max_tokens: 16,
-      });
-      const response = await fetchWithTimeout(probeUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: probeBody,
-        signal: undefined,
-      } as unknown as string, 15000);
-      // Need to re-do this with proper fetch signature
-    } catch {
-      // Probe is best-effort; skip on failure
-    }
+    // Hello probe is best-effort and skipped to keep the env test fast.
   }
 
   // ---------- Check fallback configuration ----------
