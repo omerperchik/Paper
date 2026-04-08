@@ -153,6 +153,26 @@ export function getMarketplaceSeeds(): MarketplaceItem[] {
       updatedAt: now,
     },
 
+    // --- Plugins (Installable) ---
+    {
+      id: randomUUID(),
+      name: "WhatsApp Gateway (Baileys)",
+      slug: "whatsapp-gateway",
+      category: "integration",
+      author: "Paperclip Team",
+      description: "Connect WhatsApp to your agents — scan a QR code, no Business API needed. Agents can send messages, request approvals, and deliver dashboards via WhatsApp.",
+      longDescription: "Communication backbone for the Paperclip marketing platform. Uses Baileys (WhatsApp Web reverse-engineered protocol) to connect your personal WhatsApp number. Agents get tools to send messages, ask questions and wait for replies, request approvals (reply 1/2/3), send formatted KPI dashboards, and push notifications. QR code authentication — no Meta Business account or third-party service required.",
+      version: "0.2.0",
+      changelog: "v0.2.0: Rewritten from Cloud API to Baileys — QR code auth, no Business API\nv0.1.0: Initial WhatsApp Business Cloud API version",
+      icon: "💬",
+      rating: 4.7,
+      ratingCount: 42,
+      installCount: 287,
+      tags: ["whatsapp", "messaging", "communication", "notifications", "approvals", "plugin"],
+      createdAt: now,
+      updatedAt: now,
+    },
+
     // --- Integrations ---
     {
       id: randomUUID(),
