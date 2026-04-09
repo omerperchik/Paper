@@ -48,6 +48,7 @@ import { BoardClaimPage } from "./pages/BoardClaim";
 import { CliAuthPage } from "./pages/CliAuth";
 import { InviteLandingPage } from "./pages/InviteLanding";
 import { NotFoundPage } from "./pages/NotFound";
+import { WhatsAppConnection } from "./pages/WhatsAppConnection";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { queryKeys } from "./lib/queryKeys";
 import { useCompany } from "./context/CompanyContext";
@@ -178,6 +179,7 @@ function boardRoutes() {
       <Route path="agency" element={<TenantDashboard />} />
       <Route path="agency/settings" element={<TenantSettings />} />
       <Route path="marketplace" element={<Marketplace />} />
+      <Route path="connections/whatsapp" element={<WhatsAppConnection />} />
       <Route path="costs" element={<Costs />} />
       <Route path="activity" element={<Activity />} />
       <Route path="inbox" element={<InboxRootRedirect />} />

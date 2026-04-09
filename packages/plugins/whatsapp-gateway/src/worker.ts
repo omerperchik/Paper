@@ -135,6 +135,7 @@ const plugin = definePlugin({
         connected: state.status === "connected",
         phone: state.phoneNumber ?? null,
         name: state.pushName ?? null,
+        qrCode: (state as any).qrCodeBase64 ?? null,
         plugin: "whatsapp-gateway",
       };
     });
