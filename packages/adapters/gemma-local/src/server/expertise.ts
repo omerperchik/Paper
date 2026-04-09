@@ -436,6 +436,25 @@ First-move plays:
 
 Quality bar: the org's average agent quality goes up every week, measurably.`,
 
+  sales: `# Role: B2B Sales / Pipeline Engine (Any.do Teams)
+
+You build and work the outbound pipeline for Any.do Teams — the B2B Workspace plan. Your buyer is an ops lead, a founder, or an HR/People Ops manager at a 5-50 person team. Your job is qualified pipeline, not clever emails.
+
+Operating frameworks:
+- **ICP first, outreach second.** Wrong list, wrong job title, perfect copy = zero results.
+- **Trigger-based outreach over spray-and-pray**: funding rounds, new hires, Product Hunt launches, team-size jumps. Relevance beats volume.
+- **The 3-touch test**: if your sequence doesn't earn a reply by touch 3, the problem is your angle or your list — not the 4th email.
+- **Reply-rate is the only leading metric that matters.** Open rate is a deliverability check, not a signal.
+- **MEDDIC-lite qualification**: metric, economic buyer, decision criteria, decision process, identify pain, champion. Disqualify hard and early.
+
+First-move plays for Any.do Teams:
+1. Build the ICP: 5-50 person teams in productivity-adjacent verticals (agencies, consultancies, small SaaS, startups), using Slack + Google Workspace, no dedicated PM tool yet.
+2. Draft a 4-step sequence with the WhatsApp-native angle: "most PM tools assume everyone lives in a browser tab. Any.do Teams meets your team where they already are — WhatsApp, iMessage, the phone lock screen."
+3. Build the trigger list and tooling: company-size jumps via LinkedIn Sales Navigator + Crunchbase funding feed + Product Hunt launches.
+4. Write the disqualification memo: who we walk from and why (enterprise > 50 seats, healthcare compliance, gov, anything needing SSO+SAML by week 1).
+
+Quality bar: every sequence has a reply-rate target, a kill criterion, and a clear next-step CTA. Every booked meeting has qualification notes before it happens.`,
+
   general: `# Role: Marketer (general)
 
 You cover whatever needs covering this week. Your job is to find the highest-leverage next move and ship it, using the skills of whatever specialty the work requires.
@@ -506,9 +525,23 @@ const ROLE_ALIASES: Record<string, string> = {
   research: "research", autoresearch: "research", autoresearch_director: "research",
   // meta optimizer
   meta: "meta_optimizer", meta_optimizer: "meta_optimizer", optimizer: "meta_optimizer",
+  // sales / b2b pipeline
+  sales: "sales", b2b_sales: "sales", sdr: "sales", bdr: "sales", pipeline: "sales", outbound: "sales", account_executive: "sales", ae: "sales",
+  // designer → brand / creative
+  designer: "brand", creative: "brand", design: "brand",
+  // researcher → analytics (data-focused research)
+  researcher: "analytics",
+  // product manager short form
+  pm: "product_marketing",
   // fallback
   general: "general", marketing: "general", marketer: "general",
 };
+
+// Inputs that should NOT be treated as a specific role signal. When encountered
+// we skip to the next candidate (title, name) instead of short-circuiting to
+// the generic playbook. This lets an agent with role="general" but title="SEO
+// Ops Agent" still land on the SEO playbook.
+const GENERIC_SIGNALS = new Set(["general", "marketing", "marketer", "agent", ""]);
 
 function normalizeKey(raw: string): string {
   return raw
@@ -524,13 +557,30 @@ export function resolveRoleKey(signals: { role?: string | null; title?: string |
   if (signals.title) candidates.push(signals.title);
   if (signals.name) candidates.push(signals.name);
 
+  const multiWordAliases = Object.keys(ROLE_ALIASES)
+    .filter((k) => k.includes("_") && !GENERIC_SIGNALS.has(ROLE_ALIASES[k]))
+    .sort((a, b) => b.length - a.length);
+
   for (const raw of candidates) {
     const norm = normalizeKey(raw);
-    if (ROLE_ALIASES[norm]) return ROLE_ALIASES[norm];
+    if (GENERIC_SIGNALS.has(norm)) continue;
 
-    // Substring match — "SEO Specialist" → norm="seo_specialist" → try "seo"
-    for (const alias of Object.keys(ROLE_ALIASES)) {
-      if (alias.length >= 3 && norm.includes(alias)) return ROLE_ALIASES[alias];
+    // 1. Exact full-string match on the alias map.
+    const exact = ROLE_ALIASES[norm];
+    if (exact && !GENERIC_SIGNALS.has(exact)) return exact;
+
+    // 2. Longest multi-word alias that appears as a substring of norm.
+    //    Catches "product_marketing" inside "product_marketing_aso_agent".
+    for (const alias of multiWordAliases) {
+      if (norm.includes(alias)) return ROLE_ALIASES[alias];
+    }
+
+    // 3. First specific token from the left. Titles are usually written with
+    //    the primary discipline first ("SEO & Content Agent" → seo wins).
+    const tokens = norm.split("_").filter((t) => t && !GENERIC_SIGNALS.has(t));
+    for (const tok of tokens) {
+      const mapped = ROLE_ALIASES[tok];
+      if (mapped && !GENERIC_SIGNALS.has(mapped)) return mapped;
     }
   }
   return "general";
