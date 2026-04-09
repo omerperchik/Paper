@@ -16,6 +16,7 @@ import {
 } from "../index.js";
 import { parseChatCompletion, parseErrorResponse } from "./parse.js";
 import { getOllamaQueue } from "./ollama-queue.js";
+import { buildExpertisePreamble } from "./expertise.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -405,14 +406,32 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   // issue queued for follow-up) instead of idling.
   const programMd = typeof context.paperclipProgramMd === "string" ? context.paperclipProgramMd : "";
   const isAutonomousRun = context.paperclipAutonomousRun === true;
-  let systemPrompt = baseSystemPrompt;
+
+  // World-class expertise layer: every gemma-local agent operates as a
+  // domain specialist whose mandate is to promote Any.do. We prepend an
+  // Any.do company brief + role-specific playbook to the system prompt so
+  // the agent has deep frameworks, target metrics, quality bars, and
+  // first-move plays for their specialty. The role is resolved from agent
+  // signals passed in via heartbeat context (role, title, name, capabilities).
+  const agentRole = typeof context.paperclipAgentRole === "string" ? context.paperclipAgentRole : null;
+  const agentTitle = typeof context.paperclipAgentTitle === "string" ? context.paperclipAgentTitle : null;
+  const agentCapabilities = typeof context.paperclipAgentCapabilities === "string" ? context.paperclipAgentCapabilities : null;
+  const { preamble: expertisePreamble, resolvedRoleKey } = buildExpertisePreamble({
+    role: agentRole,
+    title: agentTitle,
+    name: agent.name,
+    capabilities: agentCapabilities,
+  });
+
+  let systemPrompt = [expertisePreamble, baseSystemPrompt].filter((s) => s && s.trim().length > 0).join("\n\n---\n\n");
+
   if (programMd) {
     systemPrompt = [
-      baseSystemPrompt,
+      systemPrompt,
       "---",
-      "# Your program.md (autonomous mandate)",
+      "# Your program.md (persistent mandate)",
       "",
-      "This is your persistent identity, hypothesis, protocol, metric history, known-bad list, and backlog. Use it as the source of truth for what to work on.",
+      "Below is YOUR specific identity, hypothesis, protocol, metric history, known-bad list, and backlog. This overrides the generic role playbook where they differ. Use it as the source of truth for what to work on.",
       "",
       programMd,
     ].filter((s) => s.length > 0).join("\n");
@@ -469,6 +488,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         `Fallback: MiniMax at ${fallbackUrl} model=${fallbackModel} timeout=${fallbackTimeoutSec}s`,
         `Queue: ${ollamaQueue.statusLine()}`,
         `Messages: ${messages.length} (${tools ? tools.length + " tools" : "no tools"})`,
+        `Role: ${resolvedRoleKey}${isAutonomousRun ? " (autonomous)" : ""}${programMd ? " +program.md" : ""}`,
       ],
       prompt,
       context,

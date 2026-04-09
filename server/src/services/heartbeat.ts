@@ -3204,6 +3204,13 @@ export function heartbeatService(db: Db) {
       // know to fall back to program.md-driven autonomous work selection.
       context.paperclipAutonomousRun = !readNonEmptyString(context.issueId);
 
+      // Pass agent role/title/capabilities so the adapter can build a
+      // role-specific world-class expertise preamble (Any.do brief +
+      // domain playbook). See packages/adapters/gemma-local/src/server/expertise.ts
+      if (agent.role) context.paperclipAgentRole = agent.role;
+      if (agent.title) context.paperclipAgentTitle = agent.title;
+      if (agent.capabilities) context.paperclipAgentCapabilities = agent.capabilities;
+
       const adapter = getServerAdapter(agent.adapterType);
       const authToken = adapter.supportsLocalAgentJwt
         ? createLocalAgentJwt(agent.id, agent.companyId, agent.adapterType, run.id)
