@@ -21,6 +21,7 @@ import { timeAgo } from "../lib/timeAgo";
 import { cn, formatCents } from "../lib/utils";
 import { Bot, CircleDot, DollarSign, ShieldCheck, LayoutDashboard, PauseCircle } from "lucide-react";
 import { ActiveAgentsPanel } from "../components/ActiveAgentsPanel";
+import { LiveFeed } from "../components/LiveFeed";
 import { ChartCard, RunActivityChart, PriorityChart, IssueStatusChart, SuccessRateChart } from "../components/ActivityCharts";
 import { FailureClassesPanel } from "../components/FailureClassesPanel";
 import { PageSkeleton } from "../components/PageSkeleton";
@@ -206,6 +207,8 @@ export function Dashboard() {
           </button>
         </div>
       )}
+
+      <LiveFeed companyId={selectedCompanyId!} />
 
       <ActiveAgentsPanel companyId={selectedCompanyId!} />
 
