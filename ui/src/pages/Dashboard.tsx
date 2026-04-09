@@ -208,9 +208,9 @@ export function Dashboard() {
         </div>
       )}
 
-      <LiveFeed companyId={selectedCompanyId!} />
-
-      <ActiveAgentsPanel companyId={selectedCompanyId!} />
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="min-w-0 space-y-6">
+          <ActiveAgentsPanel companyId={selectedCompanyId!} />
 
       {data && (
         <>
@@ -388,6 +388,12 @@ export function Dashboard() {
 
         </>
       )}
+        </div>
+
+        <aside className="min-w-0 xl:sticky xl:top-4 xl:self-start xl:h-[calc(100vh-2rem)] xl:overflow-hidden">
+          <LiveFeed companyId={selectedCompanyId!} />
+        </aside>
+      </div>
     </div>
   );
 }

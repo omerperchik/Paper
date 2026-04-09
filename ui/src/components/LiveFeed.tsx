@@ -279,8 +279,8 @@ export function LiveFeed({ companyId }: LiveFeedProps) {
   const [expanded, setExpanded] = useState<string | null>(null);
 
   return (
-    <div className="rounded-xl border border-border bg-card/30 overflow-hidden">
-      <div className="flex items-center justify-between gap-3 border-b border-border/60 px-4 py-2.5">
+    <div className="flex h-full max-h-full flex-col overflow-hidden rounded-xl border border-border bg-card/30">
+      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border/60 px-4 py-2.5">
         <div className="flex items-center gap-2">
           <span className="relative flex h-2 w-2">
             {activeCount > 0 ? (
@@ -312,7 +312,7 @@ export function LiveFeed({ companyId }: LiveFeedProps) {
           Nothing yet. Waiting for agents…
         </div>
       ) : (
-        <ul className="divide-y divide-border/60">
+        <ul className="min-h-0 flex-1 divide-y divide-border/60 overflow-y-auto">
           {items.map((item) => (
             <FeedRow
               key={item.key}
