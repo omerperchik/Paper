@@ -122,6 +122,7 @@ vi.mock("../services/index.js", () => ({
   reconcilePersistedRuntimeServicesOnStartup: vi.fn(async () => ({ reconciled: 0 })),
   routineService: vi.fn(() => ({
     tickScheduledTriggers: vi.fn(async () => ({ triggered: 0 })),
+    tickEventTriggers: vi.fn(async () => ({ triggered: 0 })),
   })),
 }));
 

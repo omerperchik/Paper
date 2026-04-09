@@ -60,6 +60,9 @@ export const routineTriggers = pgTable(
     enabled: boolean("enabled").notNull().default(true),
     cronExpression: text("cron_expression"),
     timezone: text("timezone"),
+    // When kind='event', this is the event name the trigger subscribes to
+    // (e.g. "cac_spike", "review_posted"). Null for non-event kinds.
+    eventKind: text("event_kind"),
     nextRunAt: timestamp("next_run_at", { withTimezone: true }),
     lastFiredAt: timestamp("last_fired_at", { withTimezone: true }),
     publicId: text("public_id"),
@@ -78,6 +81,7 @@ export const routineTriggers = pgTable(
   (table) => ({
     companyRoutineIdx: index("routine_triggers_company_routine_idx").on(table.companyId, table.routineId),
     companyKindIdx: index("routine_triggers_company_kind_idx").on(table.companyId, table.kind),
+    companyEventKindIdx: index("routine_triggers_company_event_kind_idx").on(table.companyId, table.eventKind),
     nextRunIdx: index("routine_triggers_next_run_idx").on(table.nextRunAt),
     publicIdIdx: index("routine_triggers_public_id_idx").on(table.publicId),
     publicIdUq: uniqueIndex("routine_triggers_public_id_uq").on(table.publicId),

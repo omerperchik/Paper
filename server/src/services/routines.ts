@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { and, asc, desc, eq, inArray, isNotNull, isNull, lte, ne, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
+  agentEvents,
   agents,
   companySecrets,
   goals,
@@ -1471,6 +1472,168 @@ export function routineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeup
       }
 
       return { triggered };
+    },
+
+    tickEventTriggers: async (now: Date = new Date(), limit = 100) => {
+      // Select unconsumed events, oldest first, with a small cap per tick.
+      const due = await db
+        .select()
+        .from(agentEvents)
+        .where(isNull(agentEvents.consumedAt))
+        .orderBy(asc(agentEvents.emittedAt))
+        .limit(limit);
+
+      let triggered = 0;
+      for (const event of due) {
+        // Claim the event atomically — if another worker already marked it
+        // consumed we skip. This keeps processing idempotent under future
+        // multi-process deployments.
+        const claimed = await db
+          .update(agentEvents)
+          .set({ consumedAt: now })
+          .where(and(eq(agentEvents.id, event.id), isNull(agentEvents.consumedAt)))
+          .returning({ id: agentEvents.id })
+          .then((rows) => rows[0] ?? null);
+        if (!claimed) continue;
+
+        // Find matching event triggers for this company+kind.
+        const matches = await db
+          .select({ trigger: routineTriggers, routine: routines })
+          .from(routineTriggers)
+          .innerJoin(routines, eq(routineTriggers.routineId, routines.id))
+          .where(
+            and(
+              eq(routineTriggers.companyId, event.companyId),
+              eq(routineTriggers.kind, "event"),
+              eq(routineTriggers.eventKind, event.eventKind),
+              eq(routineTriggers.enabled, true),
+              eq(routines.status, "active"),
+            ),
+          );
+
+        for (const { trigger, routine } of matches) {
+          try {
+            await dispatchRoutineRun({
+              routine,
+              trigger,
+              source: "api",
+              payload: {
+                event: {
+                  id: event.id,
+                  kind: event.eventKind,
+                  sourceAgentId: event.sourceAgentId,
+                  sourceRunId: event.sourceRunId,
+                  sourceLabel: event.sourceLabel,
+                  emittedAt: event.emittedAt,
+                  payload: event.payload,
+                },
+              },
+            });
+            triggered += 1;
+          } catch (err) {
+            logger.error(
+              {
+                err: err instanceof Error ? err.message : String(err),
+                eventId: event.id,
+                eventKind: event.eventKind,
+                routineId: routine.id,
+                triggerId: trigger.id,
+              },
+              "event trigger dispatch failed",
+            );
+          }
+
+          // Mark the trigger as recently fired so the UI can show last-fired time.
+          await db
+            .update(routineTriggers)
+            .set({ lastFiredAt: now, updatedAt: now })
+            .where(eq(routineTriggers.id, trigger.id));
+        }
+      }
+
+      return { triggered };
+    },
+
+    emitEvent: async (input: {
+      companyId: string;
+      eventKind: string;
+      sourceAgentId?: string | null;
+      sourceRunId?: string | null;
+      sourceLabel?: string | null;
+      payload?: Record<string, unknown>;
+    }) => {
+      const [row] = await db
+        .insert(agentEvents)
+        .values({
+          companyId: input.companyId,
+          eventKind: input.eventKind,
+          sourceAgentId: input.sourceAgentId ?? null,
+          sourceRunId: input.sourceRunId ?? null,
+          sourceLabel: input.sourceLabel ?? null,
+          payload: input.payload ?? {},
+        })
+        .returning();
+      return row;
+    },
+
+    listEvents: async (companyId: string, limit = 100) => {
+      return db
+        .select()
+        .from(agentEvents)
+        .where(eq(agentEvents.companyId, companyId))
+        .orderBy(desc(agentEvents.emittedAt))
+        .limit(limit);
+    },
+
+    /**
+     * Lightweight creator for event triggers. This bypasses the main
+     * createTrigger pipeline (which is gated by the shared CreateRoutineTrigger
+     * type that only knows about 'schedule' and 'webhook' kinds) so the
+     * event-bus feature can ship without churn in the shared types package.
+     */
+    createEventTrigger: async (input: {
+      companyId: string;
+      routineId: string;
+      eventKind: string;
+      label?: string | null;
+      enabled?: boolean;
+      actor?: Actor;
+    }) => {
+      const routine = await db
+        .select()
+        .from(routines)
+        .where(and(eq(routines.id, input.routineId), eq(routines.companyId, input.companyId)))
+        .then((rows) => rows[0] ?? null);
+      if (!routine) throw notFound("Routine not found");
+
+      const [trigger] = await db
+        .insert(routineTriggers)
+        .values({
+          companyId: input.companyId,
+          routineId: input.routineId,
+          kind: "event",
+          eventKind: input.eventKind,
+          label: input.label ?? `event:${input.eventKind}`,
+          enabled: input.enabled ?? true,
+          createdByAgentId: input.actor?.agentId ?? null,
+          createdByUserId: input.actor?.userId ?? null,
+          updatedByAgentId: input.actor?.agentId ?? null,
+          updatedByUserId: input.actor?.userId ?? null,
+        })
+        .returning();
+      return trigger;
+    },
+
+    listEventTriggers: async (companyId: string) => {
+      return db
+        .select({
+          trigger: routineTriggers,
+          routine: routines,
+        })
+        .from(routineTriggers)
+        .innerJoin(routines, eq(routineTriggers.routineId, routines.id))
+        .where(and(eq(routineTriggers.companyId, companyId), eq(routineTriggers.kind, "event")))
+        .orderBy(asc(routineTriggers.eventKind), asc(routines.title));
     },
 
     syncRunStatusForIssue: async (issueId: string) => {

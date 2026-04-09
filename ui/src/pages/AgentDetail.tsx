@@ -8,6 +8,7 @@ import {
   type AgentPermissionUpdate,
 } from "../api/agents";
 import { companySkillsApi } from "../api/companySkills";
+import { agentProgramsApi, type AgentProgramRevision } from "../api/agentPrograms";
 import { budgetsApi } from "../api/budgets";
 import { heartbeatsApi } from "../api/heartbeats";
 import { instanceSettingsApi } from "../api/instanceSettings";
@@ -223,12 +224,13 @@ function scrollToContainerBottom(container: ScrollContainer, behavior: ScrollBeh
   container.scrollTo({ top: container.scrollHeight, behavior });
 }
 
-type AgentDetailView = "dashboard" | "instructions" | "configuration" | "skills" | "runs" | "budget";
+type AgentDetailView = "dashboard" | "instructions" | "configuration" | "skills" | "program" | "runs" | "budget";
 
 function parseAgentDetailView(value: string | null): AgentDetailView {
   if (value === "instructions" || value === "prompts") return "instructions";
   if (value === "configure" || value === "configuration") return "configuration";
   if (value === "skills") return "skills";
+  if (value === "program") return "program";
   if (value === "budget") return "budget";
   if (value === "runs") return value;
   return "dashboard";
@@ -1009,6 +1011,7 @@ export function AgentDetail() {
               { value: "instructions", label: "Instructions" },
               { value: "skills", label: "Skills" },
               { value: "configuration", label: "Configuration" },
+              { value: "program", label: "Program" },
               { value: "runs", label: "Runs" },
               { value: "budget", label: "Budget" },
             ]}
@@ -1122,6 +1125,10 @@ export function AgentDetail() {
           agent={agent}
           companyId={resolvedCompanyId ?? undefined}
         />
+      )}
+
+      {activeView === "program" && (
+        <ProgramTab agent={agent} />
       )}
 
       {activeView === "runs" && (
@@ -2873,6 +2880,208 @@ function RunListItem({ run, isSelected, agentId }: { run: HeartbeatRun; isSelect
         </div>
       )}
     </Link>
+  );
+}
+
+function ProgramTab({ agent }: { agent: Agent }) {
+  const queryClient = useQueryClient();
+  const { pushToast } = useToast();
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const { data: revisions, isLoading, error } = useQuery<AgentProgramRevision[]>({
+    queryKey: queryKeys.agents.programRevisions(agent.id),
+    queryFn: () => agentProgramsApi.list(agent.id, 100),
+  });
+
+  const seedMutation = useMutation({
+    mutationFn: () => agentProgramsApi.seed(agent.id),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.agents.programRevisions(agent.id) });
+      pushToast({ title: "Seeded from current program.md", tone: "success" });
+    },
+    onError: (err) => pushToast({ title: "Seed failed", body: (err as Error).message, tone: "error" }),
+  });
+
+  const activateMutation = useMutation({
+    mutationFn: (revisionId: string) => agentProgramsApi.activate(agent.id, revisionId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.agents.programRevisions(agent.id) });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agent.id) });
+      pushToast({ title: "Revision activated", tone: "success" });
+    },
+    onError: (err) => pushToast({ title: "Activate failed", body: (err as Error).message, tone: "error" }),
+  });
+
+  const revertMutation = useMutation({
+    mutationFn: (reason: string) => agentProgramsApi.revert(agent.id, reason),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: queryKeys.agents.programRevisions(agent.id) });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agent.id) });
+      pushToast({ title: "Reverted to previous revision", tone: "success" });
+    },
+    onError: (err) => pushToast({ title: "Revert failed", body: (err as Error).message, tone: "error" }),
+  });
+
+  const list = revisions ?? [];
+  const selected = selectedId
+    ? list.find((r) => r.id === selectedId) ?? null
+    : list.find((r) => r.status === "active") ?? list[0] ?? null;
+  const hasActive = list.some((r) => r.status === "active");
+  const hasSuperseded = list.some((r) => r.status === "superseded");
+
+  if (isLoading) {
+    return <div className="p-4 text-sm text-muted-foreground">Loading program revisions…</div>;
+  }
+  if (error) {
+    return <div className="p-4 text-sm text-destructive">Failed to load: {(error as Error).message}</div>;
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold">Program revisions</h2>
+          <p className="text-xs text-muted-foreground">
+            Versioned program.md history with propose / activate / revert lifecycle.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {list.length === 0 && (
+            <Button size="sm" onClick={() => seedMutation.mutate()} disabled={seedMutation.isPending}>
+              {seedMutation.isPending ? "Seeding…" : "Seed from current"}
+            </Button>
+          )}
+          {hasActive && hasSuperseded && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                const reason = window.prompt("Reason for revert?");
+                if (reason && reason.trim()) revertMutation.mutate(reason.trim());
+              }}
+              disabled={revertMutation.isPending}
+            >
+              {revertMutation.isPending ? "Reverting…" : "Revert active"}
+            </Button>
+          )}
+        </div>
+      </div>
+
+      {list.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
+          No revisions yet. Seed from the current program.md to create a baseline.
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-[280px_1fr] gap-4">
+          <div className="space-y-1 max-h-[600px] overflow-y-auto border border-border rounded-lg p-2">
+            {list.map((r) => {
+              const isSelected = selected?.id === r.id;
+              const statusColor =
+                r.status === "active"
+                  ? "text-emerald-500"
+                  : r.status === "proposed"
+                    ? "text-amber-500"
+                    : r.status === "reverted"
+                      ? "text-destructive"
+                      : "text-muted-foreground";
+              return (
+                <button
+                  key={r.id}
+                  onClick={() => setSelectedId(r.id)}
+                  className={cn(
+                    "w-full text-left px-3 py-2 rounded-md text-xs border border-transparent hover:border-border transition-colors",
+                    isSelected && "bg-muted border-border",
+                  )}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium">rev #{r.revisionNumber}</span>
+                    <span className={cn("uppercase tracking-wide", statusColor)}>{r.status}</span>
+                  </div>
+                  <div className="text-[10px] text-muted-foreground tabular-nums mt-0.5">
+                    {new Date(r.createdAt).toLocaleString()}
+                  </div>
+                  {r.rationale && (
+                    <div className="text-[11px] text-muted-foreground line-clamp-2 mt-1">
+                      {r.rationale}
+                    </div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="border border-border rounded-lg p-4 space-y-3">
+            {selected ? (
+              <>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold">
+                      Revision #{selected.revisionNumber}{" "}
+                      <span className="text-xs uppercase tracking-wide text-muted-foreground">
+                        ({selected.status})
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-muted-foreground">
+                      Created {new Date(selected.createdAt).toLocaleString()}
+                      {selected.activatedAt && ` · Activated ${new Date(selected.activatedAt).toLocaleString()}`}
+                    </div>
+                  </div>
+                  {selected.status === "proposed" && (
+                    <Button
+                      size="sm"
+                      onClick={() => activateMutation.mutate(selected.id)}
+                      disabled={activateMutation.isPending}
+                    >
+                      {activateMutation.isPending ? "Activating…" : "Activate"}
+                    </Button>
+                  )}
+                </div>
+
+                {selected.rationale && (
+                  <div className="text-xs">
+                    <div className="text-muted-foreground uppercase tracking-wide mb-1">Rationale</div>
+                    <div className="whitespace-pre-wrap">{selected.rationale}</div>
+                  </div>
+                )}
+
+                {(selected.metricName || selected.metricBaseline || selected.metricObserved) && (
+                  <div className="text-xs grid grid-cols-3 gap-2 rounded-md bg-muted/50 p-2">
+                    <div>
+                      <div className="text-muted-foreground">Metric</div>
+                      <div>{selected.metricName ?? "—"}</div>
+                    </div>
+                    <div>
+                      <div className="text-muted-foreground">Baseline</div>
+                      <div className="tabular-nums">{selected.metricBaseline ?? "—"}</div>
+                    </div>
+                    <div>
+                      <div className="text-muted-foreground">Observed</div>
+                      <div className="tabular-nums">{selected.metricObserved ?? "—"}</div>
+                    </div>
+                  </div>
+                )}
+
+                {selected.revertedReason && (
+                  <div className="text-xs rounded-md bg-destructive/10 border border-destructive/30 p-2">
+                    <div className="text-destructive uppercase tracking-wide mb-1">Reverted</div>
+                    <div className="whitespace-pre-wrap">{selected.revertedReason}</div>
+                  </div>
+                )}
+
+                <div>
+                  <div className="text-[11px] text-muted-foreground uppercase tracking-wide mb-1">program.md</div>
+                  <pre className="text-xs font-mono whitespace-pre-wrap bg-muted/30 border border-border rounded-md p-3 max-h-[400px] overflow-y-auto">
+                    {selected.programMd}
+                  </pre>
+                </div>
+              </>
+            ) : (
+              <div className="text-sm text-muted-foreground">Select a revision.</div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
