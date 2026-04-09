@@ -1110,6 +1110,21 @@ export function heartbeatService(db: Db) {
   const workspaceOperationsSvc = workspaceOperationService(db);
   const activeRunExecutions = new Set<string>();
 
+  // "Always on" kick: invoked after a run terminates so the scheduler can
+  // immediately check for the next unit of work (routine schedules, event
+  // triggers, interval timers) without waiting for the next periodic tick.
+  // Wired up from server/src/index.ts via setOnRunFinished.
+  let onRunFinishedKick: (() => void) | null = null;
+  function kickAfterRunFinished(): void {
+    const cb = onRunFinishedKick;
+    if (!cb) return;
+    try {
+      cb();
+    } catch (err) {
+      logger.error({ err }, "onRunFinished kick failed");
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Global run concurrency limiter
   //
@@ -2429,6 +2444,7 @@ export function heartbeatService(db: Db) {
 
       await finalizeAgentStatus(run.agentId, "failed");
       await startNextQueuedRunForAgent(run.agentId);
+      kickAfterRunFinished();
       runningProcesses.delete(run.id);
       reaped.push(run.id);
     }
@@ -3530,6 +3546,7 @@ export function heartbeatService(db: Db) {
           activeRunExecutions.delete(run.id);
           releaseGlobalSlot();
           await startNextQueuedRunForAgent(run.agentId);
+          kickAfterRunFinished();
         }
   }
 
@@ -4316,6 +4333,7 @@ export function heartbeatService(db: Db) {
     runningProcesses.delete(run.id);
     await finalizeAgentStatus(run.agentId, "cancelled");
     await startNextQueuedRunForAgent(run.agentId);
+    kickAfterRunFinished();
     return cancelled;
   }
 
@@ -4509,6 +4527,10 @@ export function heartbeatService(db: Db) {
       }),
 
     wakeup: enqueueWakeup,
+
+    setOnRunFinished(cb: (() => void) | null) {
+      onRunFinishedKick = cb;
+    },
 
     reportRunActivity: clearDetachedRunWarning,
 

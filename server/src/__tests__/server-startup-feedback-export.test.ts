@@ -118,6 +118,7 @@ vi.mock("../services/index.js", () => ({
     reapOrphanedRuns: vi.fn(async () => undefined),
     resumeQueuedRuns: vi.fn(async () => undefined),
     tickTimers: vi.fn(async () => ({ enqueued: 0 })),
+    setOnRunFinished: vi.fn(),
   })),
   reconcilePersistedRuntimeServicesOnStartup: vi.fn(async () => ({ reconciled: 0 })),
   routineService: vi.fn(() => ({

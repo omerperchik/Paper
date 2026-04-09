@@ -592,39 +592,47 @@ export async function startServer(): Promise<StartedServer> {
       .catch((err) => {
         logger.error({ err }, "startup heartbeat recovery failed");
       });
-    setInterval(() => {
+    // Runs every scheduler source of work — heartbeat timers, routine cron
+    // schedules, and event triggers. Called periodically AND after every run
+    // completion (via the heartbeat kick) so agents chain into the next task
+    // without waiting for the next interval ("always on" dispatch).
+    const runSchedulerSweep = (kind: "periodic" | "kick") => {
       void heartbeat
         .tickTimers(new Date())
         .then((result) => {
           if (result.enqueued > 0) {
-            logger.info({ ...result }, "heartbeat timer tick enqueued runs");
+            logger.info({ ...result, kind }, "heartbeat timer tick enqueued runs");
           }
         })
         .catch((err) => {
-          logger.error({ err }, "heartbeat timer tick failed");
+          logger.error({ err, kind }, "heartbeat timer tick failed");
         });
 
       void routines
         .tickScheduledTriggers(new Date())
         .then((result) => {
           if (result.triggered > 0) {
-            logger.info({ ...result }, "routine scheduler tick enqueued runs");
+            logger.info({ ...result, kind }, "routine scheduler tick enqueued runs");
           }
         })
         .catch((err) => {
-          logger.error({ err }, "routine scheduler tick failed");
+          logger.error({ err, kind }, "routine scheduler tick failed");
         });
 
       void routines
         .tickEventTriggers(new Date())
         .then((result) => {
           if (result.triggered > 0) {
-            logger.info({ ...result }, "routine event tick enqueued runs");
+            logger.info({ ...result, kind }, "routine event tick enqueued runs");
           }
         })
         .catch((err) => {
-          logger.error({ err }, "routine event tick failed");
+          logger.error({ err, kind }, "routine event tick failed");
         });
+    };
+
+    setInterval(() => {
+      runSchedulerSweep("periodic");
 
       // Periodically reap orphaned runs (5-min staleness threshold) and make sure
       // persisted queued work is still being driven forward.
@@ -635,6 +643,19 @@ export async function startServer(): Promise<StartedServer> {
           logger.error({ err }, "periodic heartbeat recovery failed");
         });
     }, config.heartbeatSchedulerIntervalMs);
+
+    // "Always on" kick: after any run finishes, immediately look for the next
+    // piece of work instead of waiting for the next scheduler interval.
+    // Debounced so a burst of run completions coalesces into a single sweep.
+    let kickTimer: NodeJS.Timeout | null = null;
+    const KICK_DEBOUNCE_MS = 250;
+    heartbeat.setOnRunFinished(() => {
+      if (kickTimer) return;
+      kickTimer = setTimeout(() => {
+        kickTimer = null;
+        runSchedulerSweep("kick");
+      }, KICK_DEBOUNCE_MS);
+    });
   }
   
   if (config.databaseBackupEnabled) {
