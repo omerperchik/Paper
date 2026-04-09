@@ -629,6 +629,23 @@ export async function startServer(): Promise<StartedServer> {
         .catch((err) => {
           logger.error({ err, kind }, "routine event tick failed");
         });
+
+      // Keep-alive: after the above ticks have had a chance to enqueue work,
+      // force-wake the stalest agent if the whole instance is still idle.
+      // Small delay so natural work from the ticks above has time to land in
+      // the queued/running state before we check.
+      setTimeout(() => {
+        void heartbeat
+          .tickKeepAlive(new Date())
+          .then((result) => {
+            if (result.forced) {
+              logger.info({ ...result, kind }, "keep-alive forced a run");
+            }
+          })
+          .catch((err) => {
+            logger.error({ err, kind }, "keep-alive tick failed");
+          });
+      }, 500);
     };
 
     setInterval(() => {

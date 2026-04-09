@@ -4573,6 +4573,60 @@ export function heartbeatService(db: Db) {
       return { checked, enqueued, skipped };
     },
 
+    // Keep-alive: guarantees at least one agent is always working. If nothing
+    // is currently queued/running across the whole instance, pick the eligible
+    // agent with the oldest last heartbeat and force-wake it (bypassing the
+    // per-agent interval guard). The global concurrency cap still applies, so
+    // this can't cause runaway overlap — it only fires when the system would
+    // otherwise be idle.
+    tickKeepAlive: async (now = new Date()) => {
+      const [{ count: liveCount }] = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(heartbeatRuns)
+        .where(inArray(heartbeatRuns.status, ["queued", "running"]));
+      if (liveCount > 0) {
+        return { forced: false, reason: "active_runs_present" as const, active: liveCount };
+      }
+
+      const allAgents = await db.select().from(agents);
+      const eligible = allAgents.filter((agent) => {
+        if (agent.status === "paused" || agent.status === "terminated" || agent.status === "pending_approval") return false;
+        const policy = parseHeartbeatPolicy(agent);
+        return policy.enabled && policy.intervalSec > 0;
+      });
+      if (eligible.length === 0) {
+        return { forced: false, reason: "no_eligible_agents" as const, active: 0 };
+      }
+
+      eligible.sort((a, b) => {
+        const aTs = new Date(a.lastHeartbeatAt ?? a.createdAt).getTime();
+        const bTs = new Date(b.lastHeartbeatAt ?? b.createdAt).getTime();
+        return aTs - bTs;
+      });
+      const target = eligible[0];
+
+      const run = await enqueueWakeup(target.id, {
+        source: "timer",
+        triggerDetail: "system",
+        reason: "keep_alive",
+        requestedByActorType: "system",
+        requestedByActorId: "keep_alive_scheduler",
+        contextSnapshot: {
+          source: "scheduler",
+          reason: "keep_alive",
+          now: now.toISOString(),
+        },
+      });
+
+      return {
+        forced: !!run,
+        reason: run ? ("forced" as const) : ("enqueue_skipped" as const),
+        agentId: target.id,
+        agentName: target.name,
+        active: 0,
+      };
+    },
+
     cancelRun: (runId: string) => cancelRunInternal(runId),
 
     cancelActiveForAgent: (agentId: string) => cancelActiveForAgentInternal(agentId),
