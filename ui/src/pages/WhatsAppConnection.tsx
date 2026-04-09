@@ -24,7 +24,7 @@ interface WhatsAppStatus {
 }
 
 interface PluginConfig {
-  chairmanPhoneNumber?: string;
+  chairmanPhoneNumber?: string | number;
   authDataDir?: string;
 }
 
@@ -101,7 +101,7 @@ export function WhatsAppConnection() {
   // Load config on mount
   useEffect(() => {
     fetchPluginConfig().then((cfg) => {
-      const num = cfg.chairmanPhoneNumber ?? "";
+      const num = cfg.chairmanPhoneNumber == null ? "" : String(cfg.chairmanPhoneNumber);
       setPhoneNumber(num);
       setSavedPhone(num);
     });
