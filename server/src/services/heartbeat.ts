@@ -3199,7 +3199,10 @@ export function heartbeatService(db: Db) {
       // mechanism that turns an "idle heartbeat" into real marketing/research/
       // content work — the agent reads its backlog from program.md and picks
       // the next highest-priority item to execute.
-      const agentMeta = (agent.metadata ?? {}) as { programMd?: unknown };
+      const agentMeta = (agent.metadata ?? {}) as {
+        programMd?: unknown;
+        projectId?: unknown;
+      };
       const programMdText = typeof agentMeta.programMd === "string" ? agentMeta.programMd.trim() : "";
       if (programMdText) {
         context.paperclipProgramMd = programMdText;
@@ -3209,11 +3212,39 @@ export function heartbeatService(db: Db) {
       context.paperclipAutonomousRun = !readNonEmptyString(context.issueId);
 
       // Pass agent role/title/capabilities so the adapter can build a
-      // role-specific world-class expertise preamble (Any.do brief +
+      // role-specific world-class expertise preamble (product brief +
       // domain playbook). See packages/adapters/gemma-local/src/server/expertise.ts
       if (agent.role) context.paperclipAgentRole = agent.role;
       if (agent.title) context.paperclipAgentTitle = agent.title;
       if (agent.capabilities) context.paperclipAgentCapabilities = agent.capabilities;
+
+      // Resolve the product brief for this agent via its project. Each agent
+      // belongs to at most one project (stored in agent.metadata.projectId).
+      // We pass the project name to the adapter as a brief key; the adapter
+      // resolves it against its in-code PRODUCT_BRIEFS map (e.g. "Any.do" →
+      // ANYDO_BRIEF, "FormBuddy" → FORMBUDDY_BRIEF). This keeps briefs
+      // versioned with the code and editable without DB migrations.
+      const agentProjectIdRaw = typeof agentMeta.projectId === "string" ? agentMeta.projectId.trim() : "";
+      if (agentProjectIdRaw.length > 0) {
+        try {
+          const [projectRow] = await db
+            .select({ id: projects.id, name: projects.name })
+            .from(projects)
+            .where(eq(projects.id, agentProjectIdRaw))
+            .limit(1);
+          if (projectRow) {
+            context.paperclipProjectId = projectRow.id;
+            context.paperclipProjectName = projectRow.name;
+            context.paperclipProductBriefKey = projectRow.name;
+            context.paperclipProductName = projectRow.name;
+          }
+        } catch (err) {
+          logger.warn(
+            { err, agentId: agent.id, projectId: agentProjectIdRaw },
+            "failed to resolve project for agent run",
+          );
+        }
+      }
 
       const adapter = getServerAdapter(agent.adapterType);
       const authToken = adapter.supportsLocalAgentJwt

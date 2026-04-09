@@ -408,19 +408,26 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const isAutonomousRun = context.paperclipAutonomousRun === true;
 
   // World-class expertise layer: every gemma-local agent operates as a
-  // domain specialist whose mandate is to promote Any.do. We prepend an
-  // Any.do company brief + role-specific playbook to the system prompt so
-  // the agent has deep frameworks, target metrics, quality bars, and
-  // first-move plays for their specialty. The role is resolved from agent
-  // signals passed in via heartbeat context (role, title, name, capabilities).
+  // domain specialist for whichever product its project promotes. The
+  // heartbeat service resolves the agent → project → product brief and
+  // injects the brief (and optional product name) via context. We prepend
+  // the brief + role-specific playbook to the system prompt so the agent
+  // has deep frameworks, target metrics, quality bars, and first-move
+  // plays grounded in the right product.
   const agentRole = typeof context.paperclipAgentRole === "string" ? context.paperclipAgentRole : null;
   const agentTitle = typeof context.paperclipAgentTitle === "string" ? context.paperclipAgentTitle : null;
   const agentCapabilities = typeof context.paperclipAgentCapabilities === "string" ? context.paperclipAgentCapabilities : null;
-  const { preamble: expertisePreamble, resolvedRoleKey } = buildExpertisePreamble({
+  const productBrief = typeof context.paperclipProductBrief === "string" ? context.paperclipProductBrief : null;
+  const productBriefKey = typeof context.paperclipProductBriefKey === "string" ? context.paperclipProductBriefKey : null;
+  const productName = typeof context.paperclipProductName === "string" ? context.paperclipProductName : null;
+  const { preamble: expertisePreamble, resolvedRoleKey, resolvedProductName } = buildExpertisePreamble({
     role: agentRole,
     title: agentTitle,
     name: agent.name,
     capabilities: agentCapabilities,
+    brief: productBrief,
+    briefKey: productBriefKey,
+    productName,
   });
 
   let systemPrompt = [expertisePreamble, baseSystemPrompt].filter((s) => s && s.trim().length > 0).join("\n\n---\n\n");
@@ -488,7 +495,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         `Fallback: MiniMax at ${fallbackUrl} model=${fallbackModel} timeout=${fallbackTimeoutSec}s`,
         `Queue: ${ollamaQueue.statusLine()}`,
         `Messages: ${messages.length} (${tools ? tools.length + " tools" : "no tools"})`,
-        `Role: ${resolvedRoleKey}${isAutonomousRun ? " (autonomous)" : ""}${programMd ? " +program.md" : ""}`,
+        `Role: ${resolvedRoleKey}${isAutonomousRun ? " (autonomous)" : ""}${programMd ? " +program.md" : ""} · Product: ${resolvedProductName}`,
       ],
       prompt,
       context,
