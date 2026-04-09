@@ -40,9 +40,16 @@ Operational fields:
 - timeoutSec (number, optional): Ollama request timeout in seconds (default 240)
 - fallbackTimeoutSec (number, optional): MiniMax request timeout in seconds (default 120)
 
+Queue management fields (shared across all agents in the process):
+- maxConcurrentOllama (number, optional): Max concurrent Ollama requests (default 2)
+- maxQueueDepth (number, optional): Max requests waiting for Ollama before overflow to MiniMax (default 3)
+- queueTimeoutMs (number, optional): Max time (ms) to wait in queue before routing to MiniMax (default 60000)
+
 Notes:
-- Connects to Ollama's OpenAI-compatible chat completions endpoint.
+- Connects to Ollama's native /api/chat endpoint with think control.
 - Every AI call is trace-logged with model, was_fallback, latency_ms, and token counts.
 - Supports conversation history, system prompts, and tool calls via OpenAI chat format.
 - When Ollama is unreachable or errors, automatically falls back to MiniMax cloud API.
+- A shared in-process queue limits concurrent Ollama requests to prevent GPU contention.
+  When the queue is full, requests overflow directly to MiniMax without waiting.
 `;

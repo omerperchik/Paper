@@ -1108,6 +1108,50 @@ export function heartbeatService(db: Db) {
   const executionWorkspacesSvc = executionWorkspaceService(db);
   const workspaceOperationsSvc = workspaceOperationService(db);
   const activeRunExecutions = new Set<string>();
+
+  // ---------------------------------------------------------------------------
+  // Global run concurrency limiter
+  //
+  // Prevents overwhelming the LLM backend (Ollama/MiniMax) by capping
+  // the total number of agent runs executing simultaneously across all agents.
+  // Runs that exceed the limit stay in "queued" status until a slot opens.
+  // ---------------------------------------------------------------------------
+  const MAX_GLOBAL_CONCURRENT_RUNS = parseInt(process.env.MAX_GLOBAL_CONCURRENT_RUNS ?? "5", 10);
+  const globalRunWaiters: Array<() => void> = [];
+
+  function canStartGlobalRun(): boolean {
+    return activeRunExecutions.size < MAX_GLOBAL_CONCURRENT_RUNS;
+  }
+
+  async function waitForGlobalSlot(runId: string, timeoutMs = 120_000): Promise<boolean> {
+    if (canStartGlobalRun()) return true;
+    logger.info(
+      { runId, active: activeRunExecutions.size, max: MAX_GLOBAL_CONCURRENT_RUNS, queued: globalRunWaiters.length },
+      "run waiting for global concurrency slot",
+    );
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        const idx = globalRunWaiters.indexOf(onSlot);
+        if (idx !== -1) globalRunWaiters.splice(idx, 1);
+        logger.warn({ runId, waitMs: timeoutMs }, "run timed out waiting for global concurrency slot");
+        resolve(false);
+      }, timeoutMs);
+
+      function onSlot() {
+        clearTimeout(timer);
+        resolve(true);
+      }
+      globalRunWaiters.push(onSlot);
+    });
+  }
+
+  function releaseGlobalSlot(): void {
+    // Wake the next waiter if there's capacity
+    if (globalRunWaiters.length > 0 && activeRunExecutions.size < MAX_GLOBAL_CONCURRENT_RUNS) {
+      const next = globalRunWaiters.shift()!;
+      next();
+    }
+  }
   const budgetHooks = {
     cancelWorkForScope: cancelBudgetScopeWork,
   };
@@ -2510,6 +2554,15 @@ export function heartbeatService(db: Db) {
       run = claimed;
     }
 
+    // Wait for a global concurrency slot before executing
+    const gotSlot = await waitForGlobalSlot(run.id);
+    if (!gotSlot) {
+      // Timed out waiting — put back to queued so it can retry later
+      await setRunStatus(runId, "queued", {});
+      logger.info({ runId }, "run returned to queue after global concurrency timeout");
+      return;
+    }
+
     activeRunExecutions.add(run.id);
 
     try {
@@ -3452,6 +3505,7 @@ export function heartbeatService(db: Db) {
         } finally {
           await releaseRuntimeServicesForRun(run.id).catch(() => undefined);
           activeRunExecutions.delete(run.id);
+          releaseGlobalSlot();
           await startNextQueuedRunForAgent(run.agentId);
         }
   }

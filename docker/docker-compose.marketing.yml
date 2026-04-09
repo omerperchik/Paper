@@ -50,6 +50,8 @@ services:
       AI_FALLBACK_URL: "https://api.minimaxi.chat/v1"
       AI_FALLBACK_MODEL: "MiniMax-M1"
       AI_FALLBACK_API_KEY: "${AI_FALLBACK_API_KEY:-}"
+      # Global run concurrency — max simultaneous agent runs (prevents Ollama overload)
+      MAX_GLOBAL_CONCURRENT_RUNS: "${MAX_GLOBAL_CONCURRENT_RUNS:-5}"
       # Marketing-specific settings
       MARKETING_DEFAULT_CAC_ALERT_THRESHOLD: "${MARKETING_CAC_ALERT:-50}"
       MARKETING_APPROVAL_REQUIRED: "${MARKETING_APPROVAL_REQUIRED:-true}"

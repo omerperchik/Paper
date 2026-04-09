@@ -15,6 +15,7 @@ import {
   DEFAULT_FALLBACK_MODEL,
 } from "../index.js";
 import { parseChatCompletion, parseErrorResponse } from "./parse.js";
+import { getOllamaQueue } from "./ollama-queue.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -395,6 +396,14 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const enableThinking = asBool(config.enableThinking, false);
   const numPredict = asNumber(config.numPredict, 2048);
 
+  // Queue configuration (can be overridden per-agent in adapter_config)
+  const maxConcurrentOllama = asNumber(config.maxConcurrentOllama, 2);
+  const maxQueueDepth = asNumber(config.maxQueueDepth, 3);
+  const queueTimeoutMs = asNumber(config.queueTimeoutMs, 60_000);
+
+  // Get or update the shared Ollama queue
+  const ollamaQueue = getOllamaQueue({ maxConcurrentOllama, maxQueueDepth, queueTimeoutMs });
+
   // Build prompt from template
   const promptTemplate = asString(
     config.promptTemplate,
@@ -419,6 +428,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       commandNotes: [
         `Primary: Ollama at ${ollamaUrl} model=${ollamaModel} timeout=${ollamaTimeoutSec}s think=${enableThinking} num_predict=${numPredict}`,
         `Fallback: MiniMax at ${fallbackUrl} model=${fallbackModel} timeout=${fallbackTimeoutSec}s`,
+        `Queue: ${ollamaQueue.statusLine()}`,
         `Messages: ${messages.length} (${tools ? tools.length + " tools" : "no tools"})`,
       ],
       prompt,
@@ -428,36 +438,94 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   await onLog("stderr", `[gemma-local] Starting execution run=${runId} agent=${agent.id}\n`);
   await onLog("stderr", `[gemma-local] Primary: ${ollamaUrl} model=${ollamaModel} think=${enableThinking}\n`);
+  await onLog("stderr", `[gemma-local] Queue: ${ollamaQueue.statusLine()}\n`);
 
-  // Attempt primary (Ollama native API with think control)
-  const primary = await callOllamaNative({
-    baseUrl: ollamaUrl,
-    model: ollamaModel,
-    messages,
-    tools,
-    timeoutMs: ollamaTimeoutSec * 1000,
-    think: enableThinking,
-    numPredict,
-  });
-  await traceLog(onLog, primary);
+  // ---------------------------------------------------------------------------
+  // Acquire Ollama slot via the shared queue
+  // ---------------------------------------------------------------------------
+  const slotResult = await ollamaQueue.acquire();
 
-  // If primary succeeded, return result
-  if (primary.ok && primary.parsed) {
-    return buildResult(primary, context);
+  if (slotResult === "overflow") {
+    // Queue is full — skip Ollama entirely, go straight to MiniMax
+    await onLog(
+      "stderr",
+      `[gemma-local] Ollama queue full (${ollamaQueue.statusLine()}). Routing directly to MiniMax.\n`,
+    );
+    return await executeFallback(fallbackUrl, fallbackModel, fallbackApiKey, messages, tools, fallbackTimeoutSec, numPredict, onLog, context);
   }
 
-  // Primary failed — attempt fallback
-  await onLog(
-    "stderr",
-    `[gemma-local] Primary (Ollama) failed: ${primary.errorMessage ?? "unknown error"}. Attempting MiniMax fallback.\n`,
-  );
+  if (slotResult === "timeout") {
+    // Waited too long in queue — go to MiniMax
+    await onLog(
+      "stderr",
+      `[gemma-local] Ollama queue wait timed out after ${Math.round(queueTimeoutMs / 1000)}s. Routing to MiniMax.\n`,
+    );
+    return await executeFallback(fallbackUrl, fallbackModel, fallbackApiKey, messages, tools, fallbackTimeoutSec, numPredict, onLog, context);
+  }
 
+  // slotResult === "acquired" — we have an Ollama slot
+  await onLog("stderr", `[gemma-local] Ollama slot acquired (${ollamaQueue.statusLine()})\n`);
+
+  try {
+    // Attempt primary (Ollama native API with think control)
+    const primary = await callOllamaNative({
+      baseUrl: ollamaUrl,
+      model: ollamaModel,
+      messages,
+      tools,
+      timeoutMs: ollamaTimeoutSec * 1000,
+      think: enableThinking,
+      numPredict,
+    });
+    await traceLog(onLog, primary);
+
+    // If primary succeeded, return result
+    if (primary.ok && primary.parsed) {
+      return buildResult(primary, context);
+    }
+
+    // Primary failed — attempt fallback
+    await onLog(
+      "stderr",
+      `[gemma-local] Primary (Ollama) failed: ${primary.errorMessage ?? "unknown error"}. Attempting MiniMax fallback.\n`,
+    );
+
+    return await executeFallback(fallbackUrl, fallbackModel, fallbackApiKey, messages, tools, fallbackTimeoutSec, numPredict, onLog, context, primary);
+  } finally {
+    // ALWAYS release the Ollama slot
+    ollamaQueue.release();
+    await onLog("stderr", `[gemma-local] Ollama slot released (${ollamaQueue.statusLine()})\n`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Fallback execution helper
+// ---------------------------------------------------------------------------
+
+async function executeFallback(
+  fallbackUrl: string,
+  fallbackModel: string,
+  fallbackApiKey: string,
+  messages: ChatMessage[],
+  tools: ToolDefinition[] | undefined,
+  fallbackTimeoutSec: number,
+  numPredict: number,
+  onLog: AdapterExecutionContext["onLog"],
+  context: Record<string, unknown>,
+  primaryResult?: CallResult,
+): Promise<AdapterExecutionResult> {
   if (!fallbackApiKey) {
     await onLog(
       "stderr",
       "[gemma-local] No fallbackApiKey configured; skipping MiniMax fallback.\n",
     );
-    return buildErrorResult(primary, `Ollama failed: ${primary.errorMessage ?? "unknown"} (no fallback API key configured)`);
+    const errorMsg = primaryResult
+      ? `Ollama failed: ${primaryResult.errorMessage ?? "unknown"} (no fallback API key configured)`
+      : "Ollama queue overflow (no fallback API key configured)";
+    return buildErrorResult(
+      primaryResult ?? { ok: false, parsed: null, errorMessage: errorMsg, latencyMs: 0, wasFallback: false, model: "", provider: "ollama" },
+      errorMsg,
+    );
   }
 
   const fallback = await callOpenAICompat({
@@ -476,9 +544,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     return buildResult(fallback, context);
   }
 
-  // Both failed
+  // Fallback also failed
+  const primaryError = primaryResult?.errorMessage ?? "skipped (queue overflow)";
   const combinedError = [
-    `Ollama: ${primary.errorMessage ?? "unknown"}`,
+    `Ollama: ${primaryError}`,
     `MiniMax: ${fallback.errorMessage ?? "unknown"}`,
   ].join("; ");
   await onLog("stderr", `[gemma-local] Both providers failed. ${combinedError}\n`);
