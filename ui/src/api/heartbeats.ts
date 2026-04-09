@@ -29,6 +29,7 @@ export interface LiveRunForIssue {
   routineTitle?: string | null;
   reason?: string | null;
   wakeReason?: string | null;
+  headline?: string | null;
 }
 
 export const heartbeatsApi = {

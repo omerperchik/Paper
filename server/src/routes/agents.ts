@@ -2309,6 +2309,7 @@ export function agentRoutes(db: Db) {
       routineTitle: routinesTable.title,
       reason: sql<string | null>`${heartbeatRuns.contextSnapshot} ->> 'reason'`.as("reason"),
       wakeReason: sql<string | null>`${heartbeatRuns.contextSnapshot} ->> 'wakeReason'`.as("wakeReason"),
+      headline: sql<string | null>`${heartbeatRuns.resultJson} ->> 'headline'`.as("headline"),
     };
 
     const baseFrom = (q: ReturnType<typeof db.select<typeof columns>>) =>

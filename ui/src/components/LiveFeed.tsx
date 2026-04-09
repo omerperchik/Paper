@@ -60,7 +60,12 @@ function runDescription(run: LiveRunForIssue): string {
   if (run.routineTitle) return run.routineTitle;
   // Next: linked issue title (manual wakeups, event triggers, etc.)
   if (run.issueTitle) return run.issueTitle;
-  // Reason from context snapshot (scheduler ticks, retries)
+  // Extracted deliverable headline from the adapter's result_json.content
+  // (e.g. "Any.do Positioning Canvas", "7-Email Activation Sequence"). This
+  // is only populated on finished runs.
+  if (run.headline && run.headline.trim().length > 0) return run.headline.trim();
+  // Reason from context snapshot (scheduler ticks, retries) — fallback only
+  // when we don't yet have a headline (e.g. still running).
   const reason = run.reason ?? run.wakeReason;
   if (reason && REASON_LABELS[reason]) return REASON_LABELS[reason];
   if (reason) return reason.replace(/_/g, " ");

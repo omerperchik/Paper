@@ -32,7 +32,11 @@ import { companySkillService } from "./company-skills.js";
 import { budgetService, type BudgetEnforcementScope } from "./budgets.js";
 import { secretService } from "./secrets.js";
 import { resolveDefaultAgentWorkspaceDir, resolveManagedProjectWorkspaceDir } from "../home-paths.js";
-import { buildHeartbeatRunIssueComment, summarizeHeartbeatRunResultJson } from "./heartbeat-run-summary.js";
+import {
+  buildHeartbeatRunIssueComment,
+  summarizeHeartbeatRunResultJson,
+  withDeliverableHeadline,
+} from "./heartbeat-run-summary.js";
 import { classifyFailure } from "../lib/classify-failure.js";
 import {
   buildWorkspaceReadyComment,
@@ -3364,6 +3368,11 @@ export function heartbeatService(db: Db) {
               ? (adapterResult.errorCode ?? "adapter_failed")
               : null;
 
+      // Enrich the adapter's raw result_json with a derived headline so the
+      // live feed can show what the agent actually produced instead of the
+      // bare wake reason ("keep alive").
+      const enrichedResultJson = withDeliverableHeadline(adapterResult.resultJson ?? null);
+
       await setRunStatus(run.id, status, {
         finishedAt: new Date(),
         error:
@@ -3382,12 +3391,12 @@ export function heartbeatService(db: Db) {
           stdoutExcerpt,
           exitCode: adapterResult.exitCode,
           signal: adapterResult.signal,
-          resultJson: adapterResult.resultJson ?? null,
+          resultJson: enrichedResultJson,
         }),
         exitCode: adapterResult.exitCode,
         signal: adapterResult.signal,
         usageJson,
-        resultJson: adapterResult.resultJson ?? null,
+        resultJson: enrichedResultJson,
         sessionIdAfter: nextSessionState.displayId ?? nextSessionState.legacySessionId,
         stdoutExcerpt,
         stderrExcerpt,
