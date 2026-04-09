@@ -2,7 +2,7 @@ import { Router, type Request } from "express";
 import { generateKeyPairSync, randomUUID } from "node:crypto";
 import path from "node:path";
 import type { Db } from "@paperclipai/db";
-import { agents as agentsTable, companies, heartbeatRuns, issues as issuesTable } from "@paperclipai/db";
+import { agents as agentsTable, companies, heartbeatRuns, issues as issuesTable, routines as routinesTable } from "@paperclipai/db";
 import { and, desc, eq, gte, inArray, not, sql } from "drizzle-orm";
 import {
   agentSkillSyncSchema,
@@ -2291,6 +2291,7 @@ export function agentRoutes(db: Db) {
     const minCountParam = req.query.minCount as string | undefined;
     const minCount = minCountParam ? Math.max(0, Math.min(20, parseInt(minCountParam, 10) || 0)) : 0;
 
+    const issueIdExpr = sql<string | null>`${heartbeatRuns.contextSnapshot} ->> 'issueId'`;
     const columns = {
       id: heartbeatRuns.id,
       status: heartbeatRuns.status,
@@ -2302,13 +2303,25 @@ export function agentRoutes(db: Db) {
       agentId: heartbeatRuns.agentId,
       agentName: agentsTable.name,
       adapterType: agentsTable.adapterType,
-      issueId: sql<string | null>`${heartbeatRuns.contextSnapshot} ->> 'issueId'`.as("issueId"),
+      issueId: issueIdExpr.as("issueId"),
+      issueTitle: issuesTable.title,
+      issueIdentifier: issuesTable.identifier,
+      routineTitle: routinesTable.title,
+      reason: sql<string | null>`${heartbeatRuns.contextSnapshot} ->> 'reason'`.as("reason"),
+      wakeReason: sql<string | null>`${heartbeatRuns.contextSnapshot} ->> 'wakeReason'`.as("wakeReason"),
     };
 
-    const liveRuns = await db
-      .select(columns)
-      .from(heartbeatRuns)
-      .innerJoin(agentsTable, eq(heartbeatRuns.agentId, agentsTable.id))
+    const baseFrom = (q: ReturnType<typeof db.select<typeof columns>>) =>
+      q
+        .from(heartbeatRuns)
+        .innerJoin(agentsTable, eq(heartbeatRuns.agentId, agentsTable.id))
+        .leftJoin(issuesTable, sql`${issuesTable.id}::text = ${issueIdExpr}`)
+        .leftJoin(
+          routinesTable,
+          and(eq(issuesTable.originKind, "routine_execution"), sql`${routinesTable.id}::text = ${issuesTable.originId}`),
+        );
+
+    const liveRuns = await baseFrom(db.select(columns))
       .where(
         and(
           eq(heartbeatRuns.companyId, companyId),
@@ -2319,10 +2332,7 @@ export function agentRoutes(db: Db) {
 
     if (minCount > 0 && liveRuns.length < minCount) {
       const activeIds = liveRuns.map((r) => r.id);
-      const recentRuns = await db
-        .select(columns)
-        .from(heartbeatRuns)
-        .innerJoin(agentsTable, eq(heartbeatRuns.agentId, agentsTable.id))
+      const recentRuns = await baseFrom(db.select(columns))
         .where(
           and(
             eq(heartbeatRuns.companyId, companyId),

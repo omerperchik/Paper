@@ -45,6 +45,42 @@ function isRunActive(run: LiveRunForIssue): boolean {
   return run.status === "queued" || run.status === "running";
 }
 
+const REASON_LABELS: Record<string, string> = {
+  interval_elapsed: "heartbeat tick",
+  heartbeat_timer: "heartbeat tick",
+  manual: "manual invoke",
+  callback: "callback",
+  ping: "ping",
+  process_loss_retry: "retry after process loss",
+  continuous_dispatch: "continuous dispatch",
+};
+
+function runDescription(run: LiveRunForIssue): string {
+  // Highest signal: linked routine → the user knows exactly what work unit this is.
+  if (run.routineTitle) return run.routineTitle;
+  // Next: linked issue title (manual wakeups, event triggers, etc.)
+  if (run.issueTitle) return run.issueTitle;
+  // Reason from context snapshot (scheduler ticks, retries)
+  const reason = run.reason ?? run.wakeReason;
+  if (reason && REASON_LABELS[reason]) return REASON_LABELS[reason];
+  if (reason) return reason.replace(/_/g, " ");
+  // Invocation source + trigger detail fallback
+  const bits: string[] = [];
+  if (run.invocationSource && run.invocationSource !== "on_demand") bits.push(run.invocationSource);
+  if (run.triggerDetail && run.triggerDetail !== "system" && run.triggerDetail !== "manual") {
+    bits.push(run.triggerDetail);
+  }
+  if (bits.length > 0) return bits.join(" · ");
+  // Last resort
+  return "idle check-in";
+}
+
+function runIssueRef(run: LiveRunForIssue): string | null {
+  if (run.issueIdentifier) return run.issueIdentifier;
+  if (run.issueId) return run.issueId.slice(0, 8);
+  return null;
+}
+
 function runStatusLabel(run: LiveRunForIssue): string {
   switch (run.status) {
     case "running":
@@ -99,6 +135,50 @@ const ACTIVITY_VERBS: Record<string, string> = {
 
 function activityVerb(action: string): string {
   return ACTIVITY_VERBS[action] ?? action.replace(/[._]/g, " ");
+}
+
+function activityDescription(event: ActivityEvent): string | null {
+  const d = (event.details ?? {}) as Record<string, unknown>;
+  const pick = (key: string): string | null => {
+    const v = d[key];
+    return typeof v === "string" && v.length > 0 ? v : null;
+  };
+  // Issue updates: describe what changed
+  if (event.action === "issue.updated") {
+    const changes: string[] = [];
+    const prev = (d._previous ?? {}) as Record<string, unknown>;
+    if (typeof d.status === "string") {
+      const from = typeof prev.status === "string" ? prev.status.replace(/_/g, " ") : null;
+      changes.push(from ? `status ${from} → ${d.status.replace(/_/g, " ")}` : `status → ${d.status.replace(/_/g, " ")}`);
+    }
+    if (typeof d.priority === "string") changes.push(`priority → ${d.priority}`);
+    if (d.assigneeAgentId !== undefined || d.assigneeUserId !== undefined) changes.push("reassigned");
+    if (d.reopened === true) changes.push("reopened");
+    if (typeof d.title === "string") changes.push("title changed");
+    if (typeof d.description === "string") changes.push("description changed");
+    if (changes.length > 0) return changes.join(", ");
+  }
+  // Comments: first line of the body
+  if (event.action === "issue.comment_added" || event.action === "issue.commented") {
+    const snippet = pick("bodySnippet") ?? pick("body") ?? pick("text");
+    if (snippet) return snippet.replace(/\s+/g, " ").slice(0, 120);
+  }
+  // Approval flows
+  if (event.action.startsWith("approval.")) {
+    return pick("reason") ?? pick("title") ?? null;
+  }
+  // Cost events
+  if (event.action.startsWith("cost.")) {
+    const cents = typeof d.costCents === "number" ? d.costCents : null;
+    const provider = pick("provider");
+    if (cents !== null) return `$${(cents / 100).toFixed(4)}${provider ? ` · ${provider}` : ""}`;
+  }
+  // Documents / attachments
+  if (event.action.startsWith("issue.document_") || event.action.startsWith("issue.attachment_")) {
+    return pick("name") ?? pick("filename") ?? pick("title");
+  }
+  // Generic fallback: prefer a 'title' or 'name' field if present
+  return pick("title") ?? pick("name") ?? pick("reason") ?? pick("message");
 }
 
 function formatDuration(run: LiveRunForIssue): string | null {
@@ -266,7 +346,6 @@ function FeedRow({ item, issueById, agentById, transcriptByRun, isExpanded, onTo
     return (
       <RunFeedRow
         run={item.run}
-        issue={item.run.issueId ? issueById.get(item.run.issueId) ?? null : null}
         transcript={transcriptByRun.get(item.run.id) ?? []}
         isExpanded={isExpanded}
         onToggle={onToggle}
@@ -289,24 +368,19 @@ function FeedRow({ item, issueById, agentById, transcriptByRun, isExpanded, onTo
 
 function RunFeedRow({
   run,
-  issue,
   transcript,
   isExpanded,
   onToggle,
 }: {
   run: LiveRunForIssue;
-  issue: Issue | null;
   transcript: ReturnType<typeof useLiveRunTranscripts>["transcriptByRun"] extends Map<string, infer V> ? V : never;
   isExpanded: boolean;
   onToggle: () => void;
 }) {
   const active = isRunActive(run);
   const ts = runTimestamp(run);
-  const issueLabel = issue
-    ? `${issue.identifier ?? issue.id.slice(0, 8)} — ${issue.title}`
-    : run.issueId
-      ? run.issueId.slice(0, 8)
-      : null;
+  const description = runDescription(run);
+  const issueRef = runIssueRef(run);
 
   const Icon = active ? CircleDot : run.status === "succeeded" ? CheckCircle2 : run.status === "failed" || run.status === "timed_out" ? XCircle : Bot;
 
@@ -337,8 +411,12 @@ function RunFeedRow({
         <span className="min-w-0 flex-1 truncate">
           <span className="font-medium">{run.agentName}</span>
           <span className="text-muted-foreground"> {runStatusLabel(run)}</span>
-          {issueLabel && (
-            <span className="text-muted-foreground"> — {issueLabel}</span>
+          <span className="text-muted-foreground"> — </span>
+          <span className="text-foreground">{description}</span>
+          {issueRef && (
+            <span className="ml-1.5 rounded bg-muted px-1 py-0.5 font-mono text-[10px] text-muted-foreground">
+              {issueRef}
+            </span>
           )}
         </span>
         <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
@@ -408,16 +486,23 @@ function ActivityFeedRow({
           : event.actorId || "Unknown";
 
   let entityLabel: string | null = null;
+  let entityRef: string | null = null;
   if (event.entityType === "issue") {
     const iss = issueById.get(event.entityId);
-    entityLabel = iss
-      ? `${iss.identifier ?? iss.id.slice(0, 8)} — ${iss.title}`
-      : event.entityId.slice(0, 8);
+    entityRef = iss?.identifier ?? event.entityId.slice(0, 8);
+    entityLabel = iss?.title ?? null;
   } else if (event.entityType === "agent") {
     entityLabel = agentById.get(event.entityId)?.name ?? event.entityId.slice(0, 8);
   } else if (event.entityId) {
     entityLabel = event.entityId.slice(0, 8);
   }
+
+  const detail = activityDescription(event);
+  const summary = entityLabel
+    ? detail
+      ? `${entityLabel} — ${detail}`
+      : entityLabel
+    : detail ?? event.entityType;
 
   return (
     <li>
@@ -438,8 +523,13 @@ function ActivityFeedRow({
         </span>
         <span className="min-w-0 flex-1 truncate">
           <span className="font-medium">{actor}</span>
-          <span className="text-muted-foreground"> {verb}</span>
-          {entityLabel && <span className="text-muted-foreground"> {entityLabel}</span>}
+          <span className="text-muted-foreground"> {verb} </span>
+          <span className="text-foreground">{summary}</span>
+          {entityRef && (
+            <span className="ml-1.5 rounded bg-muted px-1 py-0.5 font-mono text-[10px] text-muted-foreground">
+              {entityRef}
+            </span>
+          )}
         </span>
         <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
           {timeAgo(event.createdAt)}

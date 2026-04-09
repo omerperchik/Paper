@@ -1409,6 +1409,34 @@ export function routineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeup
     },
 
     tickScheduledTriggers: async (now: Date = new Date()) => {
+      // Self-heal rows where next_run_at got cleared (e.g. bulk schedule edit).
+      // Without this, a NULL next_run_at would never be picked up again.
+      const stuck = await db
+        .select({ trigger: routineTriggers })
+        .from(routineTriggers)
+        .innerJoin(routines, eq(routineTriggers.routineId, routines.id))
+        .where(
+          and(
+            eq(routineTriggers.kind, "schedule"),
+            eq(routineTriggers.enabled, true),
+            eq(routines.status, "active"),
+            isNull(routineTriggers.nextRunAt),
+          ),
+        );
+      for (const { trigger } of stuck) {
+        if (!trigger.cronExpression || !trigger.timezone) continue;
+        const next = nextCronTickInTimeZone(trigger.cronExpression, trigger.timezone, now);
+        if (!next) continue;
+        await db
+          .update(routineTriggers)
+          .set({ nextRunAt: next, updatedAt: new Date() })
+          .where(and(eq(routineTriggers.id, trigger.id), isNull(routineTriggers.nextRunAt)));
+        logger.info(
+          { triggerId: trigger.id, routineId: trigger.routineId, nextRunAt: next.toISOString() },
+          "reconciled stuck routine trigger with NULL next_run_at",
+        );
+      }
+
       const due = await db
         .select({
           trigger: routineTriggers,
