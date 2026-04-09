@@ -528,31 +528,78 @@ async function executeFallback(
     );
   }
 
-  const fallback = await callOpenAICompat({
-    baseUrl: fallbackUrl,
-    model: fallbackModel,
-    apiKey: fallbackApiKey,
-    messages,
-    tools,
-    timeoutMs: fallbackTimeoutSec * 1000,
-    maxTokens: numPredict,
-    provider: "minimax",
-  });
-  await traceLog(onLog, fallback);
+  // Retry transient upstream errors (overload, 5xx, rate limit) with
+  // exponential backoff. Errors that are clearly not transient (auth, 4xx
+  // except 429) bail out immediately so we don't burn the retry budget.
+  const MAX_ATTEMPTS = 3;
+  const BASE_DELAY_MS = 1500;
+  let fallback: CallResult | null = null;
+  let lastError: string | null = null;
 
-  if (fallback.ok && fallback.parsed) {
-    return buildResult(fallback, context);
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    fallback = await callOpenAICompat({
+      baseUrl: fallbackUrl,
+      model: fallbackModel,
+      apiKey: fallbackApiKey,
+      messages,
+      tools,
+      timeoutMs: fallbackTimeoutSec * 1000,
+      maxTokens: numPredict,
+      provider: "minimax",
+    });
+    await traceLog(onLog, fallback);
+
+    if (fallback.ok && fallback.parsed) {
+      if (attempt > 1) {
+        await onLog(
+          "stderr",
+          `[gemma-local] MiniMax fallback succeeded on attempt ${attempt}/${MAX_ATTEMPTS}.\n`,
+        );
+      }
+      return buildResult(fallback, context);
+    }
+
+    lastError = fallback.errorMessage ?? "unknown";
+    const transient = isTransientUpstreamError(lastError);
+    if (!transient || attempt === MAX_ATTEMPTS) {
+      break;
+    }
+    // Exponential backoff with a bit of jitter.
+    const delayMs = BASE_DELAY_MS * Math.pow(2, attempt - 1) + Math.floor(Math.random() * 500);
+    await onLog(
+      "stderr",
+      `[gemma-local] MiniMax transient error on attempt ${attempt}/${MAX_ATTEMPTS} (${lastError}). Retrying in ${delayMs}ms.\n`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
 
-  // Fallback also failed
+  // Fallback also failed after retries
   const primaryError = primaryResult?.errorMessage ?? "skipped (queue overflow)";
   const combinedError = [
     `Ollama: ${primaryError}`,
-    `MiniMax: ${fallback.errorMessage ?? "unknown"}`,
+    `MiniMax: ${lastError ?? "unknown"}`,
   ].join("; ");
-  await onLog("stderr", `[gemma-local] Both providers failed. ${combinedError}\n`);
+  await onLog("stderr", `[gemma-local] Both providers failed after retries. ${combinedError}\n`);
 
-  return buildErrorResult(fallback, combinedError);
+  return buildErrorResult(fallback ?? { ok: false, parsed: null, errorMessage: combinedError, latencyMs: 0, wasFallback: true, model: fallbackModel, provider: "minimax" }, combinedError);
+}
+
+/**
+ * Decide whether a MiniMax error message looks like a transient upstream
+ * problem that's worth retrying. Matches the error shapes we've actually
+ * observed: HTTP 5xx, explicit "high load" messages, timeouts, MiniMax code
+ * 1000/1002/2064.
+ */
+function isTransientUpstreamError(message: string): boolean {
+  const lower = message.toLowerCase();
+  if (/\b(5\d\d)\b/.test(lower)) return true; // any 5xx
+  if (lower.includes("high load")) return true;
+  if (lower.includes("rate limit")) return true;
+  if (lower.includes("timed out") || lower.includes("etimedout") || lower.includes("econnreset")) return true;
+  if (lower.includes("server cluster")) return true;
+  // MiniMax-specific error codes observed in production
+  if (/\b(1000|1002|1004|2064)\b/.test(lower)) return true;
+  return false;
 }
 
 // ---------------------------------------------------------------------------

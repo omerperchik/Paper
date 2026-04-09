@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd plist for the nightly autoresearch-mlx loop on the Mac.
+
+  Install:
+    cp ~/Desktop/Paper/scripts/ai.paperclip.autoresearch.plist \
+       ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/ai.paperclip.autoresearch.plist
+
+  Uninstall:
+    launchctl unload ~/Library/LaunchAgents/ai.paperclip.autoresearch.plist
+    rm ~/Library/LaunchAgents/ai.paperclip.autoresearch.plist
+
+  Schedule: every day at 22:00 local time.
+  Script: ~/Desktop/autoresearch/scripts/nightly.sh
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.paperclip.autoresearch</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-lc</string>
+    <string>$HOME/Desktop/autoresearch/scripts/nightly.sh</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>AUTORESEARCH_DIR</key>
+    <string>/Users/omerperchik/Desktop/autoresearch</string>
+    <key>AUTORESEARCH_HOST</key>
+    <string>root@213.199.33.145</string>
+    <key>AUTORESEARCH_VPS_DIR</key>
+    <string>/opt/autoresearch</string>
+    <key>AUTORESEARCH_BUDGET_MIN</key>
+    <string>480</string>
+  </dict>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>22</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>/Users/omerperchik/Desktop/autoresearch/nightly.stdout.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/omerperchik/Desktop/autoresearch/nightly.stderr.log</string>
+
+  <key>RunAtLoad</key>
+  <false/>
+</dict>
+</plist>

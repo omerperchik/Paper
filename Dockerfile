@@ -52,7 +52,11 @@ COPY . .
 RUN pnpm --filter @paperclipai/ui build
 RUN pnpm --filter @paperclipai/plugin-sdk build
 RUN pnpm --filter @paperclipai/server build
+# Pre-build all in-tree plugins so their dist/ files exist in the image.
+# The plugin-loader resolves workers via the symlink created in docker-entrypoint.sh.
+RUN pnpm --filter @paperclipai/plugin-whatsapp-gateway build
 RUN test -f server/dist/index.js || (echo "ERROR: server build output missing" && exit 1)
+RUN test -f packages/plugins/whatsapp-gateway/dist/worker.js || (echo "ERROR: whatsapp-gateway plugin build output missing" && exit 1)
 
 FROM base AS production
 ARG USER_UID=1000
