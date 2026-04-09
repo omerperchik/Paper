@@ -33,6 +33,7 @@ import { budgetService, type BudgetEnforcementScope } from "./budgets.js";
 import { secretService } from "./secrets.js";
 import { resolveDefaultAgentWorkspaceDir, resolveManagedProjectWorkspaceDir } from "../home-paths.js";
 import { buildHeartbeatRunIssueComment, summarizeHeartbeatRunResultJson } from "./heartbeat-run-summary.js";
+import { classifyFailure } from "../lib/classify-failure.js";
 import {
   buildWorkspaceReadyComment,
   cleanupExecutionWorkspaceArtifacts,
@@ -2393,6 +2394,7 @@ export function heartbeatService(db: Db) {
       let finalizedRun = await setRunStatus(run.id, "failed", {
         error: shouldRetry ? `${baseMessage}; retrying once` : baseMessage,
         errorCode: "process_lost",
+        failureClass: "process_lost",
         finishedAt: now,
       });
       await setWakeupStatus(run.wakeupRequestId, "failed", {
@@ -2571,6 +2573,7 @@ export function heartbeatService(db: Db) {
       await setRunStatus(runId, "failed", {
         error: "Agent not found",
         errorCode: "agent_not_found",
+        failureClass: "agent_not_found",
         finishedAt: new Date(),
       });
       await setWakeupStatus(run.wakeupRequestId, "failed", {
@@ -3315,6 +3318,15 @@ export function heartbeatService(db: Db) {
             } as Record<string, unknown>)
           : null;
 
+      const derivedErrorCode =
+        outcome === "timed_out"
+          ? "timeout"
+          : outcome === "cancelled"
+            ? "cancelled"
+            : outcome === "failed"
+              ? (adapterResult.errorCode ?? "adapter_failed")
+              : null;
+
       await setRunStatus(run.id, status, {
         finishedAt: new Date(),
         error:
@@ -3324,14 +3336,17 @@ export function heartbeatService(db: Db) {
                 adapterResult.errorMessage ?? (outcome === "timed_out" ? "Timed out" : "Adapter failed"),
                 currentUserRedactionOptions,
               ),
-        errorCode:
-          outcome === "timed_out"
-            ? "timeout"
-            : outcome === "cancelled"
-              ? "cancelled"
-              : outcome === "failed"
-                ? (adapterResult.errorCode ?? "adapter_failed")
-                : null,
+        errorCode: derivedErrorCode,
+        failureClass: classifyFailure({
+          outcome,
+          errorCode: derivedErrorCode,
+          errorMessage: adapterResult.errorMessage ?? null,
+          stderrExcerpt,
+          stdoutExcerpt,
+          exitCode: adapterResult.exitCode,
+          signal: adapterResult.signal,
+          resultJson: adapterResult.resultJson ?? null,
+        }),
         exitCode: adapterResult.exitCode,
         signal: adapterResult.signal,
         usageJson,
@@ -3422,6 +3437,13 @@ export function heartbeatService(db: Db) {
       const failedRun = await setRunStatus(run.id, "failed", {
         error: message,
         errorCode: "adapter_failed",
+        failureClass: classifyFailure({
+          outcome: "failed",
+          errorCode: "adapter_failed",
+          errorMessage: message,
+          stderrExcerpt,
+          stdoutExcerpt,
+        }),
         finishedAt: new Date(),
         stdoutExcerpt,
         stderrExcerpt,
@@ -3476,7 +3498,8 @@ export function heartbeatService(db: Db) {
           logger.error({ err: outerErr, runId }, "heartbeat execution setup failed");
           await setRunStatus(runId, "failed", {
             error: message,
-            errorCode: "adapter_failed",
+            errorCode: "setup_error",
+            failureClass: "setup_error",
             finishedAt: new Date(),
           }).catch(() => undefined);
           await setWakeupStatus(run.wakeupRequestId, "failed", {
@@ -4272,6 +4295,7 @@ export function heartbeatService(db: Db) {
       finishedAt: new Date(),
       error: reason,
       errorCode: "cancelled",
+      failureClass: "cancelled",
     });
 
     await setWakeupStatus(run.wakeupRequestId, "cancelled", {
@@ -4306,6 +4330,7 @@ export function heartbeatService(db: Db) {
         finishedAt: new Date(),
         error: reason,
         errorCode: "cancelled",
+        failureClass: "cancelled",
       });
 
       await setWakeupStatus(run.wakeupRequestId, "cancelled", {

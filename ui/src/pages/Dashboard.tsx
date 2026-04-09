@@ -22,6 +22,7 @@ import { cn, formatCents } from "../lib/utils";
 import { Bot, CircleDot, DollarSign, ShieldCheck, LayoutDashboard, PauseCircle } from "lucide-react";
 import { ActiveAgentsPanel } from "../components/ActiveAgentsPanel";
 import { ChartCard, RunActivityChart, PriorityChart, IssueStatusChart, SuccessRateChart } from "../components/ActivityCharts";
+import { FailureClassesPanel } from "../components/FailureClassesPanel";
 import { PageSkeleton } from "../components/PageSkeleton";
 import type { Agent, Issue } from "@paperclipai/shared";
 import { PluginSlotOutlet } from "@/plugins/slots";
@@ -297,6 +298,8 @@ export function Dashboard() {
               <SuccessRateChart runs={runs ?? []} />
             </ChartCard>
           </div>
+
+          {selectedCompanyId && <FailureClassesPanel companyId={selectedCompanyId} />}
 
           <PluginSlotOutlet
             slotTypes={["dashboardWidget"]}

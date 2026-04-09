@@ -3,7 +3,7 @@ import { generateKeyPairSync, randomUUID } from "node:crypto";
 import path from "node:path";
 import type { Db } from "@paperclipai/db";
 import { agents as agentsTable, companies, heartbeatRuns, issues as issuesTable } from "@paperclipai/db";
-import { and, desc, eq, inArray, not, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, not, sql } from "drizzle-orm";
 import {
   agentSkillSyncSchema,
   agentMineInboxQuerySchema,
@@ -2217,6 +2217,71 @@ export function agentRoutes(db: Db) {
     const limit = limitParam ? Math.max(1, Math.min(1000, parseInt(limitParam, 10) || 200)) : undefined;
     const runs = await heartbeat.list(companyId, agentId, limit);
     res.json(runs);
+  });
+
+  router.get("/companies/:companyId/failure-classes", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+
+    // Default window: last 24h. Max window: 30 days.
+    const windowHoursParam = req.query.windowHours as string | undefined;
+    const windowHoursRaw = windowHoursParam ? parseInt(windowHoursParam, 10) : 24;
+    const windowHours = Number.isFinite(windowHoursRaw)
+      ? Math.max(1, Math.min(24 * 30, windowHoursRaw))
+      : 24;
+    const since = new Date(Date.now() - windowHours * 60 * 60 * 1000);
+
+    const agentIdFilter =
+      typeof req.query.agentId === "string" && req.query.agentId.length > 0
+        ? (req.query.agentId as string)
+        : null;
+
+    const rows = await db
+      .select({
+        failureClass: heartbeatRuns.failureClass,
+        status: heartbeatRuns.status,
+        count: sql<number>`count(*)::int`.as("count"),
+      })
+      .from(heartbeatRuns)
+      .where(
+        and(
+          eq(heartbeatRuns.companyId, companyId),
+          gte(heartbeatRuns.createdAt, since),
+          ...(agentIdFilter ? [eq(heartbeatRuns.agentId, agentIdFilter)] : []),
+          inArray(heartbeatRuns.status, ["succeeded", "failed", "timed_out", "cancelled"]),
+        ),
+      )
+      .groupBy(heartbeatRuns.failureClass, heartbeatRuns.status);
+
+    const breakdown: Record<string, number> = {};
+    let total = 0;
+    let succeeded = 0;
+    for (const row of rows) {
+      total += row.count;
+      if (row.status === "succeeded") {
+        succeeded += row.count;
+        continue;
+      }
+      const cls = row.failureClass ?? "unclassified";
+      breakdown[cls] = (breakdown[cls] ?? 0) + row.count;
+    }
+
+    const sorted = Object.entries(breakdown)
+      .map(([failureClass, count]) => ({
+        failureClass,
+        count,
+        percentOfAll: total > 0 ? count / total : 0,
+      }))
+      .sort((a, b) => b.count - a.count);
+
+    res.json({
+      windowHours,
+      since: since.toISOString(),
+      total,
+      succeeded,
+      successRate: total > 0 ? succeeded / total : 0,
+      breakdown: sorted,
+    });
   });
 
   router.get("/companies/:companyId/live-runs", async (req, res) => {

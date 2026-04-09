@@ -379,6 +379,13 @@
       "when": 1776000000000,
       "tag": "0053_event_bus_and_program_revisions",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1776086400000,
+      "tag": "0054_heartbeat_runs_failure_class",
+      "breakpoints": true
     }
   ]
 }

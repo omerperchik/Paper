@@ -30,6 +30,7 @@ export const heartbeatRuns = pgTable(
     stdoutExcerpt: text("stdout_excerpt"),
     stderrExcerpt: text("stderr_excerpt"),
     errorCode: text("error_code"),
+    failureClass: text("failure_class"),
     externalRunId: text("external_run_id"),
     processPid: integer("process_pid"),
     processStartedAt: timestamp("process_started_at", { withTimezone: true }),
@@ -48,6 +49,11 @@ export const heartbeatRuns = pgTable(
     companyAgentStartedIdx: index("heartbeat_runs_company_agent_started_idx").on(
       table.companyId,
       table.agentId,
+      table.startedAt,
+    ),
+    companyFailureClassIdx: index("heartbeat_runs_company_failure_class_idx").on(
+      table.companyId,
+      table.failureClass,
       table.startedAt,
     ),
   }),
