@@ -3190,6 +3190,20 @@ export function heartbeatService(db: Db) {
         });
       };
 
+      // Inject the agent's program.md (autonomous mandate) into the adapter
+      // context so adapters can prepend it to the system prompt. This is the
+      // mechanism that turns an "idle heartbeat" into real marketing/research/
+      // content work — the agent reads its backlog from program.md and picks
+      // the next highest-priority item to execute.
+      const agentMeta = (agent.metadata ?? {}) as { programMd?: unknown };
+      const programMdText = typeof agentMeta.programMd === "string" ? agentMeta.programMd.trim() : "";
+      if (programMdText) {
+        context.paperclipProgramMd = programMdText;
+      }
+      // Flag that this run was triggered with no explicit issue so adapters
+      // know to fall back to program.md-driven autonomous work selection.
+      context.paperclipAutonomousRun = !readNonEmptyString(context.issueId);
+
       const adapter = getServerAdapter(agent.adapterType);
       const authToken = adapter.supportsLocalAgentJwt
         ? createLocalAgentJwt(agent.id, agent.companyId, agent.adapterType, run.id)

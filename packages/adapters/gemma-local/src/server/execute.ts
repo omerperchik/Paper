@@ -392,9 +392,47 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const fallbackApiKey = asString(config.fallbackApiKey, "");
   const ollamaTimeoutSec = asNumber(config.timeoutSec, 600);
   const fallbackTimeoutSec = asNumber(config.fallbackTimeoutSec, 120);
-  const systemPrompt = asString(config.systemPrompt, "");
+  const baseSystemPrompt = asString(config.systemPrompt, "");
   const enableThinking = asBool(config.enableThinking, false);
   const numPredict = asNumber(config.numPredict, 2048);
+
+  // Autonomous work directive: if the heartbeat service injected a program.md
+  // for this agent, prepend it to the system prompt so the model has its
+  // identity, hypothesis, backlog, and known-bad list as context. When the
+  // run has no explicit issue (autonomous heartbeat), also append a directive
+  // telling the model to pick the next highest-priority backlog item and
+  // produce real output (research note, copy draft, content piece, or a new
+  // issue queued for follow-up) instead of idling.
+  const programMd = typeof context.paperclipProgramMd === "string" ? context.paperclipProgramMd : "";
+  const isAutonomousRun = context.paperclipAutonomousRun === true;
+  let systemPrompt = baseSystemPrompt;
+  if (programMd) {
+    systemPrompt = [
+      baseSystemPrompt,
+      "---",
+      "# Your program.md (autonomous mandate)",
+      "",
+      "This is your persistent identity, hypothesis, protocol, metric history, known-bad list, and backlog. Use it as the source of truth for what to work on.",
+      "",
+      programMd,
+    ].filter((s) => s.length > 0).join("\n");
+  }
+  if (isAutonomousRun) {
+    const autonomyDirective = [
+      "---",
+      "# Autonomous run directive",
+      "",
+      "This invocation has no explicit task assigned. You MUST produce real, useful marketing/research/content/copy work this turn — not a status check.",
+      "",
+      "Steps:",
+      "1. Look at the backlog section of your program.md. Pick the single highest-priority item you can complete this turn.",
+      "2. If the backlog is empty, generate ONE new backlog item grounded in your hypothesis and identity, then execute it.",
+      "3. Execute the work end-to-end: do the research, write the copy, draft the content, run the analysis. Use your available tools to persist output (create issues, post comments, write files, publish drafts).",
+      "4. Record what you did in your metric history (via the program.md update tool if available, otherwise as a comment on a tracking issue).",
+      "5. Never return an empty turn. If you cannot complete the chosen item, split it into a smaller deliverable and complete that.",
+    ].join("\n");
+    systemPrompt = systemPrompt ? `${systemPrompt}\n${autonomyDirective}` : autonomyDirective;
+  }
 
   // Queue configuration (can be overridden per-agent in adapter_config)
   const maxConcurrentOllama = asNumber(config.maxConcurrentOllama, 2);
@@ -404,11 +442,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   // Get or update the shared Ollama queue
   const ollamaQueue = getOllamaQueue({ maxConcurrentOllama, maxQueueDepth, queueTimeoutMs });
 
-  // Build prompt from template
-  const promptTemplate = asString(
-    config.promptTemplate,
-    "You are agent {{agent.id}} ({{agent.name}}). Continue your Paperclip work.",
-  );
+  // Build prompt from template. Default differs based on whether this is an
+  // autonomous heartbeat run (no assigned issue) or a task-driven run.
+  const defaultPromptTemplate = isAutonomousRun
+    ? "You are {{agent.name}} ({{agent.id}}). This is an autonomous heartbeat turn — no task has been assigned. Per your system instructions, pick the next highest-priority item from your program.md backlog and execute it end-to-end this turn. Produce a concrete deliverable (research note, copy draft, content piece, analysis, or new issue) — do not return an empty turn."
+    : "You are agent {{agent.id}} ({{agent.name}}). Continue your Paperclip work.";
+  const promptTemplate = asString(config.promptTemplate, defaultPromptTemplate);
   const prompt = promptTemplate
     .replace(/\{\{agent\.id\}\}/g, agent.id)
     .replace(/\{\{agent\.name\}\}/g, agent.name)
