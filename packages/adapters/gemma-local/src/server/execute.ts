@@ -420,7 +420,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const productBrief = typeof context.paperclipProductBrief === "string" ? context.paperclipProductBrief : null;
   const productBriefKey = typeof context.paperclipProductBriefKey === "string" ? context.paperclipProductBriefKey : null;
   const productName = typeof context.paperclipProductName === "string" ? context.paperclipProductName : null;
-  const { preamble: expertisePreamble, resolvedRoleKey, resolvedProductName } = buildExpertisePreamble({
+  const skillsManifest = typeof context.paperclipSkillsManifest === "string" ? context.paperclipSkillsManifest : null;
+  const { preamble: expertisePreamble, resolvedRoleKey, resolvedProductName, skillCount } = buildExpertisePreamble({
     role: agentRole,
     title: agentTitle,
     name: agent.name,
@@ -428,9 +429,25 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     brief: productBrief,
     briefKey: productBriefKey,
     productName,
+    skillsManifest,
   });
 
-  let systemPrompt = [expertisePreamble, baseSystemPrompt].filter((s) => s && s.trim().length > 0).join("\n\n---\n\n");
+  // Server-injected web research findings (DuckDuckGo). The heartbeat
+  // service performs a keyless search for research-oriented agents and
+  // attaches the formatted results here so the model has fresh grounding
+  // without needing tool calling.
+  const researchFindings = typeof context.paperclipResearchFindings === "string" ? context.paperclipResearchFindings.trim() : "";
+  const researchSection = researchFindings.length > 0
+    ? [
+        "# Fresh web research (server-fetched)",
+        "",
+        "The findings below were fetched from the live web by the operator runtime just before this invocation. Use them to ground your output in current information. Cite sources inline as [1], [2] etc. referencing the numbered list.",
+        "",
+        researchFindings,
+      ].join("\n")
+    : "";
+
+  let systemPrompt = [expertisePreamble, researchSection, baseSystemPrompt].filter((s) => s && s.trim().length > 0).join("\n\n---\n\n");
 
   if (programMd) {
     systemPrompt = [
@@ -495,7 +512,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         `Fallback: MiniMax at ${fallbackUrl} model=${fallbackModel} timeout=${fallbackTimeoutSec}s`,
         `Queue: ${ollamaQueue.statusLine()}`,
         `Messages: ${messages.length} (${tools ? tools.length + " tools" : "no tools"})`,
-        `Role: ${resolvedRoleKey}${isAutonomousRun ? " (autonomous)" : ""}${programMd ? " +program.md" : ""} · Product: ${resolvedProductName}`,
+        `Role: ${resolvedRoleKey}${isAutonomousRun ? " (autonomous)" : ""}${programMd ? " +program.md" : ""} · Product: ${resolvedProductName}${skillCount > 0 ? ` · Skills: ${skillCount}` : ""}`,
       ],
       prompt,
       context,

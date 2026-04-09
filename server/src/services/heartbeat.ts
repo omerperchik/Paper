@@ -29,6 +29,9 @@ import { costService } from "./costs.js";
 import { trackAgentFirstHeartbeat } from "@paperclipai/shared/telemetry";
 import { getTelemetryClient } from "../telemetry.js";
 import { companySkillService } from "./company-skills.js";
+import { buildSkillsManifest } from "./agent-skills-manifest.js";
+import { companySkills as companySkillsTable } from "@paperclipai/db";
+import { webSearch, formatSearchResultsForPrompt } from "./web-search.js";
 import { budgetService, type BudgetEnforcementScope } from "./budgets.js";
 import { secretService } from "./secrets.js";
 import { resolveDefaultAgentWorkspaceDir, resolveManagedProjectWorkspaceDir } from "../home-paths.js";
@@ -3244,6 +3247,79 @@ export function heartbeatService(db: Db) {
             "failed to resolve project for agent run",
           );
         }
+      }
+
+      // Live web research: for research-oriented agents (or any agent whose
+      // program.md explicitly requests a lookup via a "## Research query: ..."
+      // line), perform a keyless DuckDuckGo search and inject the top
+      // results into context. This gives gemma-local agents fresh grounding
+      // despite the adapter not having native tool calling.
+      try {
+        const researchRoles = new Set(["research", "community", "sales", "seo", "aso", "analytics", "product_marketing"]);
+        const programMdLower = programMdText.toLowerCase();
+        const explicitQueryMatch = /^#{1,4}\s*research query\s*:?\s*(.+)$/im.exec(programMdText);
+        const wantsResearch = explicitQueryMatch
+          || researchRoles.has((agent.role ?? "").toLowerCase())
+          || programMdLower.includes("web research")
+          || programMdLower.includes("research query");
+        if (wantsResearch) {
+          const projectName = typeof context.paperclipProjectName === "string" ? context.paperclipProjectName : "";
+          const baseQuery = explicitQueryMatch?.[1]?.trim()
+            || (projectName ? `${projectName} ${agent.role ?? "marketing"} trends 2026` : null);
+          if (baseQuery) {
+            const results = await webSearch(baseQuery, { maxResults: 5, timeoutMs: 8_000 });
+            if (results.length > 0) {
+              context.paperclipResearchQuery = baseQuery;
+              context.paperclipResearchFindings = formatSearchResultsForPrompt(baseQuery, results);
+            }
+          }
+        }
+      } catch (err) {
+        logger.warn(
+          { err, agentId: agent.id },
+          "web-search pre-run injection failed (non-fatal)",
+        );
+      }
+
+      // Load the agent's declared skills (from adapter_config.paperclipSkillSync.desiredSkills)
+      // and build a compact manifest the adapter can inject into the system
+      // prompt so the model knows which specialist playbooks are available.
+      try {
+        const adapterConfigRaw = (agent.adapterConfig ?? {}) as Record<string, unknown>;
+        const skillSync = adapterConfigRaw.paperclipSkillSync;
+        const desiredSkillKeys =
+          skillSync && typeof skillSync === "object" && !Array.isArray(skillSync)
+            ? (() => {
+                const raw = (skillSync as Record<string, unknown>).desiredSkills;
+                return Array.isArray(raw)
+                  ? raw.filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+                  : [];
+              })()
+            : [];
+        if (desiredSkillKeys.length > 0) {
+          const rows = await db
+            .select({
+              key: companySkillsTable.key,
+              name: companySkillsTable.name,
+              description: companySkillsTable.description,
+              markdown: companySkillsTable.markdown,
+            })
+            .from(companySkillsTable)
+            .where(and(
+              eq(companySkillsTable.companyId, agent.companyId),
+              inArray(companySkillsTable.key, desiredSkillKeys),
+            ));
+          const manifest = buildSkillsManifest(rows);
+          if (manifest) {
+            context.paperclipSkillsManifest = manifest;
+            context.paperclipSkillKeys = rows.map((r) => r.key);
+          }
+        }
+      } catch (err) {
+        logger.warn(
+          { err, agentId: agent.id },
+          "failed to build skills manifest for agent run",
+        );
       }
 
       const adapter = getServerAdapter(agent.adapterType);

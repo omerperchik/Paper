@@ -698,7 +698,8 @@ export function buildExpertisePreamble(signals: {
   brief?: string | null;
   briefKey?: string | null;
   productName?: string | null;
-}): { preamble: string; resolvedRoleKey: string; resolvedProductName: string } {
+  skillsManifest?: string | null;
+}): { preamble: string; resolvedRoleKey: string; resolvedProductName: string; skillCount: number } {
   const resolvedRoleKey = resolveRoleKey(signals);
   const rawPlaybook = getRolePlaybook(resolvedRoleKey);
 
@@ -723,9 +724,20 @@ export function buildExpertisePreamble(signals: {
     );
   }
 
+  // Append the skills manifest (if any) last so role playbook + product brief
+  // set the frame, then the specialist skills add tactical depth.
+  let skillCount = 0;
+  if (signals.skillsManifest && signals.skillsManifest.trim().length > 0) {
+    sections.push(signals.skillsManifest.trim());
+    // Rough count: "## " headings at line start correspond to skill entries.
+    const headingMatches = signals.skillsManifest.match(/^## /gm);
+    skillCount = headingMatches ? headingMatches.length : 0;
+  }
+
   return {
     preamble: sections.join("\n\n---\n\n"),
     resolvedRoleKey,
     resolvedProductName: productName,
+    skillCount,
   };
 }
