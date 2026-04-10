@@ -186,6 +186,146 @@ function activityDescription(event: ActivityEvent): string | null {
   return pick("title") ?? pick("name") ?? pick("reason") ?? pick("message");
 }
 
+// Build a plain-English narrative of what happened in a run, for the
+// expanded row in the feed. Uses whatever signal the run has: linked
+// routine, linked issue, extracted headline, status, tool calls, etc.
+// The goal is: a non-technical user should understand what the agent
+// actually did without reading the transcript.
+function runPlainEnglish(run: LiveRunForIssue): string {
+  const agent = run.agentName ?? "An agent";
+  const parts: string[] = [];
+
+  // What triggered it
+  const reason = run.reason ?? run.wakeReason ?? null;
+  if (reason === "interval_elapsed" || reason === "heartbeat_timer") {
+    parts.push(`${agent} woke up for a scheduled check-in`);
+  } else if (reason === "manual") {
+    parts.push(`${agent} was manually kicked off`);
+  } else if (reason === "callback") {
+    parts.push(`${agent} was woken up by another agent`);
+  } else if (run.invocationSource === "on_demand") {
+    parts.push(`${agent} was invoked on demand`);
+  } else {
+    parts.push(`${agent} started a run`);
+  }
+
+  // What it worked on
+  if (run.routineTitle) {
+    parts.push(`to execute the routine “${run.routineTitle}”`);
+  } else if (run.issueTitle) {
+    parts.push(`to work on issue “${run.issueTitle}”`);
+  }
+
+  // Outcome
+  if (run.status === "succeeded") {
+    if (run.headline && run.headline.trim().length > 0) {
+      parts.push(`and finished by producing: ${run.headline.trim()}`);
+    } else {
+      parts.push("and finished successfully");
+    }
+  } else if (run.status === "failed" || run.status === "timed_out" || run.status === "errored") {
+    parts.push(`but ${run.status === "timed_out" ? "timed out" : "failed"}`);
+  } else if (run.status === "running") {
+    parts.push("and is still running");
+  } else if (run.status === "queued") {
+    parts.push("and is queued to run");
+  } else if (run.status === "cancelled") {
+    parts.push("and was cancelled");
+  }
+
+  const dur = formatDuration(run);
+  if (dur && (run.status === "succeeded" || run.status === "failed" || run.status === "timed_out")) {
+    parts.push(`(${dur})`);
+  }
+
+  return parts.join(" ") + ".";
+}
+
+// Plain-English version for activity events. Translates the raw
+// action code ("issue.comment_added") into a real sentence.
+function activityPlainEnglish(event: ActivityEvent, actorName: string, entityLabel: string | null, entityRef: string | null): string {
+  const details = (event.details ?? {}) as Record<string, unknown>;
+  const target = entityLabel ?? entityRef ?? "an item";
+
+  switch (event.action) {
+    case "issue.created":
+      return `${actorName} created a new issue: “${target}”.`;
+    case "issue.updated": {
+      const prev = (details._previous ?? {}) as Record<string, unknown>;
+      const changes: string[] = [];
+      if (typeof details.status === "string") {
+        const from = typeof prev.status === "string" ? prev.status.replace(/_/g, " ") : null;
+        changes.push(from ? `moved status from ${from} to ${details.status.replace(/_/g, " ")}` : `set status to ${details.status.replace(/_/g, " ")}`);
+      }
+      if (typeof details.priority === "string") changes.push(`set priority to ${details.priority}`);
+      if (details.assigneeAgentId !== undefined || details.assigneeUserId !== undefined) changes.push("reassigned it");
+      if (details.reopened === true) changes.push("reopened it");
+      if (typeof details.title === "string") changes.push("changed the title");
+      if (typeof details.description === "string") changes.push("rewrote the description");
+      if (changes.length === 0) return `${actorName} updated issue “${target}”.`;
+      return `${actorName} updated issue “${target}” — ${changes.join(", ")}.`;
+    }
+    case "issue.comment_added":
+    case "issue.commented": {
+      const body = typeof details.bodySnippet === "string" ? details.bodySnippet
+        : typeof details.body === "string" ? details.body
+        : null;
+      if (body) return `${actorName} commented on “${target}”: “${body.replace(/\s+/g, " ").slice(0, 200)}”.`;
+      return `${actorName} commented on “${target}”.`;
+    }
+    case "issue.checked_out":
+      return `${actorName} picked up “${target}” and started working on it.`;
+    case "issue.released":
+      return `${actorName} put “${target}” back on the board for someone else to pick up.`;
+    case "issue.document_created":
+    case "issue.document_updated": {
+      const name = typeof details.name === "string" ? details.name : typeof details.title === "string" ? details.title : null;
+      const verb = event.action === "issue.document_created" ? "wrote" : "updated";
+      return name
+        ? `${actorName} ${verb} a document titled “${name}” on issue “${target}”.`
+        : `${actorName} ${verb} a document on issue “${target}”.`;
+    }
+    case "issue.attachment_added": {
+      const name = typeof details.filename === "string" ? details.filename : typeof details.name === "string" ? details.name : null;
+      return name
+        ? `${actorName} attached “${name}” to issue “${target}”.`
+        : `${actorName} attached a file to issue “${target}”.`;
+    }
+    case "issue.deleted":
+      return `${actorName} deleted issue “${target}”.`;
+    case "approval.created":
+      return `${actorName} asked for your approval on “${target}”.`;
+    case "approval.approved":
+      return `${actorName} approved “${target}”.`;
+    case "approval.rejected":
+      return `${actorName} rejected “${target}”.`;
+    case "cost.reported":
+    case "cost.recorded": {
+      const cents = typeof details.costCents === "number" ? details.costCents : null;
+      const provider = typeof details.provider === "string" ? details.provider : null;
+      return cents !== null
+        ? `${actorName} recorded a cost of $${(cents / 100).toFixed(4)}${provider ? ` on ${provider}` : ""} for “${target}”.`
+        : `${actorName} recorded a cost for “${target}”.`;
+    }
+    case "agent.paused":
+      return `${actorName} was paused.`;
+    case "agent.resumed":
+      return `${actorName} was resumed.`;
+    case "agent.terminated":
+      return `${actorName} was terminated.`;
+    case "project.created":
+      return `${actorName} created a new project: “${target}”.`;
+    case "project.updated":
+      return `${actorName} updated project “${target}”.`;
+    case "goal.created":
+      return `${actorName} set a new goal: “${target}”.`;
+    case "goal.updated":
+      return `${actorName} updated goal “${target}”.`;
+    default:
+      return `${actorName} performed ${event.action.replace(/[._]/g, " ")} on ${target}.`;
+  }
+}
+
 function formatDuration(run: LiveRunForIssue): string | null {
   const start = run.startedAt ? new Date(run.startedAt).getTime() : null;
   const end = run.finishedAt ? new Date(run.finishedAt).getTime() : null;
@@ -431,6 +571,9 @@ function RunFeedRow({
 
       {isExpanded && (
         <div className="border-t border-border/60 bg-muted/20 px-4 py-3">
+          <p className="mb-2 text-sm leading-5 text-foreground">
+            {runPlainEnglish(run)}
+          </p>
           <div className="mb-2 flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
               <span>
@@ -543,6 +686,9 @@ function ActivityFeedRow({
 
       {isExpanded && (
         <div className="border-t border-border/60 bg-muted/20 px-4 py-3 text-[11px] text-muted-foreground">
+          <p className="mb-2 text-sm leading-5 text-foreground">
+            {activityPlainEnglish(event, actor, entityLabel, entityRef)}
+          </p>
           <div className="mb-2 flex flex-wrap gap-x-3 gap-y-1">
             <span>action: <span className="font-mono">{event.action}</span></span>
             <span>entity: {event.entityType}</span>
