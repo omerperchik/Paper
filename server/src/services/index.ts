@@ -11,6 +11,7 @@ export { issueApprovalService } from "./issue-approvals.js";
 export { goalService } from "./goals.js";
 export { activityService, type ActivityFilters } from "./activity.js";
 export { approvalService } from "./approvals.js";
+export { agentMemoryService } from "./agent-memory.js";
 export { budgetService } from "./budgets.js";
 export { secretService } from "./secrets.js";
 export { routineService } from "./routines.js";

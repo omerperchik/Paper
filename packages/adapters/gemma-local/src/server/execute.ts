@@ -430,6 +430,7 @@ interface ToolDispatchOptions {
   authToken: string;
   companyId: string;
   agentId: string;
+  runId: string;
   projectId?: string | null;
 }
 
@@ -519,6 +520,96 @@ async function dispatchToolCall(
       }
       if (typeof args.title === "string") body.title = args.title;
       return httpJson("PATCH", `/api/issues/${encodeURIComponent(issueId)}`, body);
+    }
+    case "paperclipAskHuman": {
+      // Queue a free-text question for the human operator. We use the
+      // existing approvals table with type=ask_human so the operator sees
+      // it in the approvals UI. The agent's current heartbeat ends after
+      // this call (the tool result just tells them the question is queued).
+      // On a future heartbeat, answered questions are injected into the
+      // system prompt by the heartbeat service.
+      const question = typeof args.question === "string" ? args.question : "";
+      if (!question) return { ok: false, result: "question is required" };
+      const body = {
+        type: "ask_human",
+        payload: {
+          question,
+          context: typeof args.context === "string" ? args.context : "",
+          urgency: typeof args.urgency === "string" ? args.urgency : "normal",
+          askedByAgentId: opts.agentId,
+          askedInRunId: opts.runId,
+        },
+        requestedByAgentId: opts.agentId,
+      };
+      return httpJson("POST", `/api/companies/${opts.companyId}/approvals`, body);
+    }
+    case "paperclipWebSearch": {
+      const query = typeof args.query === "string" ? args.query : "";
+      if (!query) return { ok: false, result: "query is required" };
+      const body: Record<string, unknown> = { query };
+      if (typeof args.maxResults === "number") body.maxResults = args.maxResults;
+      return httpJson("POST", `/api/agent-tools/web-search`, body);
+    }
+    case "paperclipWebFetch": {
+      const url = typeof args.url === "string" ? args.url : "";
+      if (!url) return { ok: false, result: "url is required" };
+      return httpJson("POST", `/api/agent-tools/web-fetch`, { url });
+    }
+    case "paperclipMemoryWrite": {
+      const content = typeof args.content === "string" ? args.content : "";
+      if (!content) return { ok: false, result: "content is required" };
+      const body: Record<string, unknown> = { content };
+      if (typeof args.scope === "string") body.scope = args.scope;
+      if (typeof args.key === "string") body.key = args.key;
+      return httpJson("POST", `/api/agent-tools/memory-write`, body);
+    }
+    case "paperclipMemorySearch": {
+      const query = typeof args.query === "string" ? args.query : "";
+      if (!query) return { ok: false, result: "query is required" };
+      const body: Record<string, unknown> = { query };
+      if (typeof args.limit === "number") body.limit = args.limit;
+      return httpJson("POST", `/api/agent-tools/memory-search`, body);
+    }
+    case "paperclipRepoListFiles": {
+      const repo = typeof args.repo === "string" ? args.repo : "";
+      if (!repo) return { ok: false, result: "repo is required" };
+      const body: Record<string, unknown> = { repo };
+      if (typeof args.path === "string") body.path = args.path;
+      if (typeof args.ref === "string") body.ref = args.ref;
+      return httpJson("POST", `/api/agent-tools/repo-list-files`, body);
+    }
+    case "paperclipRepoReadFile": {
+      const repo = typeof args.repo === "string" ? args.repo : "";
+      const path = typeof args.path === "string" ? args.path : "";
+      if (!repo || !path) return { ok: false, result: "repo and path are required" };
+      const body: Record<string, unknown> = { repo, path };
+      if (typeof args.ref === "string") body.ref = args.ref;
+      return httpJson("POST", `/api/agent-tools/repo-read-file`, body);
+    }
+    case "paperclipRepoWriteFile": {
+      const repo = typeof args.repo === "string" ? args.repo : "";
+      const path = typeof args.path === "string" ? args.path : "";
+      const content = typeof args.content === "string" ? args.content : "";
+      const message = typeof args.message === "string" ? args.message : "";
+      const branch = typeof args.branch === "string" ? args.branch : "";
+      if (!repo || !path || !message || !branch) {
+        return { ok: false, result: "repo, path, message, and branch are required" };
+      }
+      const body: Record<string, unknown> = { repo, path, content, message, branch };
+      if (typeof args.baseBranch === "string") body.baseBranch = args.baseBranch;
+      return httpJson("POST", `/api/agent-tools/repo-write-file`, body);
+    }
+    case "paperclipRepoOpenPr": {
+      const repo = typeof args.repo === "string" ? args.repo : "";
+      const title = typeof args.title === "string" ? args.title : "";
+      const head = typeof args.head === "string" ? args.head : "";
+      if (!repo || !title || !head) {
+        return { ok: false, result: "repo, title, and head are required" };
+      }
+      const body: Record<string, unknown> = { repo, title, head };
+      if (typeof args.body === "string") body.body = args.body;
+      if (typeof args.base === "string") body.base = args.base;
+      return httpJson("POST", `/api/agent-tools/repo-open-pr`, body);
     }
     default:
       return { ok: false, result: `Unknown tool: ${name}` };
@@ -677,6 +768,36 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       programMd,
     ].filter((s) => s.length > 0).join("\n");
   }
+  // Surface answered / pending paperclipAskHuman questions so the agent
+  // actually notices the human's replies instead of re-asking forever.
+  const answeredAsks = Array.isArray(context.paperclipAnsweredHumanQuestions)
+    ? (context.paperclipAnsweredHumanQuestions as Array<Record<string, unknown>>)
+    : [];
+  const pendingAsks = Array.isArray(context.paperclipPendingHumanQuestions)
+    ? (context.paperclipPendingHumanQuestions as Array<Record<string, unknown>>)
+    : [];
+  if (answeredAsks.length > 0 || pendingAsks.length > 0) {
+    const asksSection: string[] = ["---", "# Human answers to your questions"];
+    if (answeredAsks.length > 0) {
+      asksSection.push("", "## Answered (act on these now — do not re-ask)");
+      for (const a of answeredAsks) {
+        const q = typeof a.question === "string" ? a.question : "";
+        const ans = typeof a.answer === "string" ? a.answer : "";
+        const decision = typeof a.decision === "string" ? a.decision : "answered";
+        asksSection.push(`- **Q:** ${q}`);
+        asksSection.push(`  **${decision === "rejected" ? "Rejected" : "A"}:** ${ans || "(no text)"}`);
+      }
+    }
+    if (pendingAsks.length > 0) {
+      asksSection.push("", "## Still pending (the operator has NOT answered yet — do NOT re-ask these):");
+      for (const p of pendingAsks) {
+        const q = typeof p.question === "string" ? p.question : "";
+        asksSection.push(`- ${q}`);
+      }
+    }
+    systemPrompt = systemPrompt ? `${systemPrompt}\n${asksSection.join("\n")}` : asksSection.join("\n");
+  }
+
   if (isAutonomousRun) {
     const autonomyDirective = [
       "---",
@@ -773,7 +894,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const companyId = typeof context.paperclipCompanyId === "string" ? context.paperclipCompanyId : agent.companyId;
   const projectId = typeof context.paperclipProjectId === "string" ? context.paperclipProjectId : null;
   const dispatch: ToolDispatchOptions | null = apiBase && authToken
-    ? { apiBase, authToken, companyId, agentId: agent.id, projectId }
+    ? { apiBase, authToken, companyId, agentId: agent.id, runId, projectId }
     : null;
 
   try {

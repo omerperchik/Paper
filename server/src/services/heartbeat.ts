@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
-import { and, asc, desc, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNull, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import type { BillingType, ExecutionWorkspace, ExecutionWorkspaceConfig } from "@paperclipai/shared";
 import {
@@ -33,6 +33,7 @@ import { buildSkillsManifest } from "./agent-skills-manifest.js";
 import { companySkills as companySkillsTable } from "@paperclipai/db";
 import { webSearch, formatSearchResultsForPrompt } from "./web-search.js";
 import { getDelegationToolDefinitions } from "./agent-tool-definitions.js";
+import { approvals as approvalsTable } from "@paperclipai/db";
 import { budgetService, type BudgetEnforcementScope } from "./budgets.js";
 import { secretService } from "./secrets.js";
 import { resolveDefaultAgentWorkspaceDir, resolveManagedProjectWorkspaceDir } from "../home-paths.js";
@@ -3358,6 +3359,66 @@ export function heartbeatService(db: Db) {
         logger.warn(
           { err, agentId: agent.id },
           "failed to inject delegation tool definitions",
+        );
+      }
+
+      // Inject answered + pending paperclipAskHuman questions for this agent
+      // so on a future heartbeat the agent actually sees the operator's
+      // answer. Without this, the agent would re-ask forever. We surface:
+      //   answeredHumanQuestions — resolved asks from this agent in the last
+      //                            14 days (operator's text is in decisionNote)
+      //   pendingHumanQuestions  — still-pending asks from this agent
+      try {
+        const cutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
+        const myAsks = await db
+          .select({
+            id: approvalsTable.id,
+            status: approvalsTable.status,
+            payload: approvalsTable.payload,
+            decisionNote: approvalsTable.decisionNote,
+            decidedAt: approvalsTable.decidedAt,
+            createdAt: approvalsTable.createdAt,
+          })
+          .from(approvalsTable)
+          .where(
+            and(
+              eq(approvalsTable.companyId, agent.companyId),
+              eq(approvalsTable.type, "ask_human"),
+              eq(approvalsTable.requestedByAgentId, agent.id),
+              gte(approvalsTable.createdAt, cutoff),
+            ),
+          )
+          .orderBy(desc(approvalsTable.createdAt))
+          .limit(25);
+
+        const answered: Array<Record<string, unknown>> = [];
+        const pending: Array<Record<string, unknown>> = [];
+        for (const row of myAsks) {
+          const payload = (row.payload as Record<string, unknown> | null) ?? {};
+          const entry = {
+            id: row.id,
+            question: typeof payload.question === "string" ? payload.question : "",
+            context: typeof payload.context === "string" ? payload.context : "",
+            urgency: typeof payload.urgency === "string" ? payload.urgency : "normal",
+            askedAt: row.createdAt?.toISOString?.() ?? null,
+          };
+          if (row.status === "approved" || row.status === "rejected") {
+            answered.push({
+              ...entry,
+              answer: row.decisionNote ?? "",
+              decision: row.status,
+              answeredAt: row.decidedAt?.toISOString?.() ?? null,
+            });
+          } else if (row.status === "pending" || row.status === "revision_requested") {
+            pending.push(entry);
+          }
+        }
+        if (answered.length > 0) context.paperclipAnsweredHumanQuestions = answered;
+        if (pending.length > 0) context.paperclipPendingHumanQuestions = pending;
+      } catch (err) {
+        logger.warn(
+          { err, agentId: agent.id },
+          "failed to inject ask_human question context",
         );
       }
 
