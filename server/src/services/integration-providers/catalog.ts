@@ -43,7 +43,7 @@ export const PROVIDER_CATALOG: ProviderDescriptor[] = [
     authHint:
       "You need 3 things: (1) a Google Ads developer token (apply at ads.google.com/aw/apicenter), (2) an OAuth2 refresh token for an authorized user, (3) the customer ID of the account to manage.",
     docsUrl: "https://developers.google.com/google-ads/api/docs/oauth/overview",
-    defaultRoles: ["marketer", "growth", "performance"],
+    defaultRoles: ["marketer", "marketing", "growth", "performance", "ads", "ppc", "demand", "acquisition", "paid", "cmo"],
     credentialFields: [
       { key: "developerToken", label: "Developer Token", kind: "password", required: true, help: "From ads.google.com/aw/apicenter" },
       { key: "oauthClientId", label: "OAuth Client ID", kind: "text", required: true },
@@ -54,7 +54,14 @@ export const PROVIDER_CATALOG: ProviderDescriptor[] = [
       { key: "customerId", label: "Customer ID", kind: "text", required: true, placeholder: "123-456-7890", help: "The ad account to manage. No dashes." },
       { key: "loginCustomerId", label: "Login Customer ID (manager)", kind: "text", required: false, help: "Only if accessing via an MCC" },
     ],
-    tools: ["paperclipGoogleAdsCreateCampaign", "paperclipGoogleAdsGetPerformance"],
+    tools: [
+      "paperclipGoogleAdsCreateCampaign",
+      "paperclipGoogleAdsGetPerformance",
+      "paperclipGoogleAdsListCampaigns",
+      "paperclipGoogleAdsUpdateCampaignStatus",
+      "paperclipGoogleAdsUpdateCampaignBudget",
+      "paperclipGoogleAdsGetSearchTerms",
+    ],
   },
   {
     provider: "facebook_ads",
@@ -64,7 +71,7 @@ export const PROVIDER_CATALOG: ProviderDescriptor[] = [
     authHint:
       "Create a System User at business.facebook.com → Business Settings → System Users. Generate a long-lived access token with ads_management + ads_read + business_management scopes. Find your Ad Account ID at adsmanager.facebook.com (prefix with 'act_').",
     docsUrl: "https://developers.facebook.com/docs/marketing-api/overview/authentication",
-    defaultRoles: ["marketer", "growth", "performance"],
+    defaultRoles: ["marketer", "marketing", "growth", "performance", "ads", "social", "paid", "acquisition", "demand", "cmo", "brand"],
     credentialFields: [
       { key: "accessToken", label: "System User Access Token", kind: "password", required: true },
     ],
@@ -72,7 +79,13 @@ export const PROVIDER_CATALOG: ProviderDescriptor[] = [
       { key: "adAccountId", label: "Ad Account ID", kind: "text", required: true, placeholder: "act_1234567890" },
       { key: "apiVersion", label: "API Version", kind: "text", required: false, placeholder: "v21.0" },
     ],
-    tools: ["paperclipFacebookAdsCreateCampaign", "paperclipFacebookAdsGetInsights"],
+    tools: [
+      "paperclipFacebookAdsCreateCampaign",
+      "paperclipFacebookAdsGetInsights",
+      "paperclipFacebookAdsListCampaigns",
+      "paperclipFacebookAdsUpdateCampaignStatus",
+      "paperclipFacebookAdsCreateAdSet",
+    ],
   },
   {
     provider: "x",
@@ -82,7 +95,7 @@ export const PROVIDER_CATALOG: ProviderDescriptor[] = [
     authHint:
       "Create a Project + App at developer.x.com/en/portal/dashboard. Generate OAuth 1.0a consumer keys + user access tokens with write permission. Bearer token alone is NOT enough for posting.",
     docsUrl: "https://developer.x.com/en/docs/authentication/oauth-1-0a",
-    defaultRoles: ["marketer", "content", "growth"],
+    defaultRoles: ["marketer", "marketing", "content", "growth", "social", "brand", "community", "pr", "copywriter", "evangelist", "cmo"],
     credentialFields: [
       { key: "apiKey", label: "API Key (Consumer Key)", kind: "password", required: true },
       { key: "apiSecret", label: "API Key Secret", kind: "password", required: true },
@@ -92,7 +105,7 @@ export const PROVIDER_CATALOG: ProviderDescriptor[] = [
     metadataFields: [
       { key: "handle", label: "Posting Handle", kind: "text", required: false, placeholder: "@yourhandle" },
     ],
-    tools: ["paperclipXPost", "paperclipXSearch"],
+    tools: ["paperclipXPost", "paperclipXSearch", "paperclipXGetTweetMetrics"],
   },
   {
     provider: "reddit",
@@ -102,7 +115,7 @@ export const PROVIDER_CATALOG: ProviderDescriptor[] = [
     authHint:
       "Create an app at reddit.com/prefs/apps (type: 'script'). Use the client id + secret + your username + password to authenticate. Posting requires the account to have enough karma in the target subreddit.",
     docsUrl: "https://github.com/reddit-archive/reddit/wiki/OAuth2",
-    defaultRoles: ["marketer", "content", "growth"],
+    defaultRoles: ["marketer", "marketing", "content", "growth", "community", "brand", "social", "pr"],
     credentialFields: [
       { key: "clientId", label: "Client ID", kind: "password", required: true },
       { key: "clientSecret", label: "Client Secret", kind: "password", required: true },
@@ -112,7 +125,7 @@ export const PROVIDER_CATALOG: ProviderDescriptor[] = [
     metadataFields: [
       { key: "userAgent", label: "User Agent", kind: "text", required: false, placeholder: "paperclip-bot/1.0 by u/yourname" },
     ],
-    tools: ["paperclipRedditPost"],
+    tools: ["paperclipRedditPost", "paperclipRedditComment", "paperclipRedditSearch"],
   },
   {
     provider: "tiktok_ads",
@@ -122,14 +135,19 @@ export const PROVIDER_CATALOG: ProviderDescriptor[] = [
     authHint:
       "Create a developer app at business-api.tiktok.com/portal. Run the OAuth flow to get a long-lived access_token for your advertiser. The advertiser_id identifies which ad account the token can act on.",
     docsUrl: "https://business-api.tiktok.com/portal/docs?id=1738373141733378",
-    defaultRoles: ["marketer", "growth", "performance"],
+    defaultRoles: ["marketer", "marketing", "growth", "performance", "ads", "social", "paid", "acquisition", "demand", "cmo"],
     credentialFields: [
       { key: "accessToken", label: "Access Token", kind: "password", required: true },
     ],
     metadataFields: [
       { key: "advertiserId", label: "Advertiser ID", kind: "text", required: true },
     ],
-    tools: ["paperclipTikTokAdsCreateCampaign", "paperclipTikTokAdsGetReport"],
+    tools: [
+      "paperclipTikTokAdsCreateCampaign",
+      "paperclipTikTokAdsGetReport",
+      "paperclipTikTokAdsListCampaigns",
+      "paperclipTikTokAdsUpdateCampaignStatus",
+    ],
   },
   {
     provider: "github",
@@ -157,7 +175,7 @@ export const PROVIDER_CATALOG: ProviderDescriptor[] = [
     authHint:
       "Go to Users → Profile → Application Passwords on your WordPress site. Create an application password and paste it below with the username. Requires WordPress 5.6+ with REST API enabled.",
     docsUrl: "https://developer.wordpress.org/rest-api/reference/",
-    defaultRoles: ["content", "marketer", "writer"],
+    defaultRoles: ["content", "marketer", "marketing", "writer", "blogger", "seo", "editor", "cmo", "brand"],
     credentialFields: [
       { key: "username", label: "Username", kind: "text", required: true },
       { key: "applicationPassword", label: "Application Password", kind: "password", required: true, placeholder: "xxxx xxxx xxxx xxxx xxxx xxxx" },
@@ -165,7 +183,12 @@ export const PROVIDER_CATALOG: ProviderDescriptor[] = [
     metadataFields: [
       { key: "siteUrl", label: "Site URL", kind: "url", required: true, placeholder: "https://example.com" },
     ],
-    tools: ["paperclipWordpressPublish"],
+    tools: [
+      "paperclipWordpressPublish",
+      "paperclipWordpressUpdatePost",
+      "paperclipWordpressListPosts",
+      "paperclipWordpressUploadMedia",
+    ],
   },
   {
     provider: "make_ugc",
@@ -175,14 +198,14 @@ export const PROVIDER_CATALOG: ProviderDescriptor[] = [
     authHint:
       "Get an API key from your MakeUGC dashboard → Settings → API. The API uses bearer authentication.",
     docsUrl: "https://makeugc.com",
-    defaultRoles: ["marketer", "content", "creative"],
+    defaultRoles: ["marketer", "marketing", "content", "creative", "brand", "growth", "performance", "ads", "social", "cmo"],
     credentialFields: [
       { key: "apiKey", label: "API Key", kind: "password", required: true },
     ],
     metadataFields: [
       { key: "defaultAvatarId", label: "Default Avatar ID", kind: "text", required: false },
     ],
-    tools: ["paperclipMakeUgcGenerate"],
+    tools: ["paperclipMakeUgcGenerate", "paperclipMakeUgcGetStatus"],
   },
   {
     provider: "sfmc",
@@ -192,7 +215,7 @@ export const PROVIDER_CATALOG: ProviderDescriptor[] = [
     authHint:
       "In Setup → Platform Tools → Apps → Installed Packages, create a server-to-server package with Email + Journey scopes. You will get a client id, client secret, and an auth tenant subdomain. The triggered-send definition key identifies which email template to send.",
     docsUrl: "https://developer.salesforce.com/docs/marketing/marketing-cloud/guide/access-token-s2s.html",
-    defaultRoles: ["marketer", "growth", "crm"],
+    defaultRoles: ["marketer", "marketing", "growth", "crm", "email", "lifecycle", "retention", "cmo"],
     credentialFields: [
       { key: "clientId", label: "Client ID", kind: "password", required: true },
       { key: "clientSecret", label: "Client Secret", kind: "password", required: true },
@@ -213,14 +236,14 @@ export const PROVIDER_CATALOG: ProviderDescriptor[] = [
     authHint:
       "Create a service account at console.firebase.google.com → Project Settings → Service accounts → Generate new private key. Paste the entire JSON file into the Service Account JSON field.",
     docsUrl: "https://firebase.google.com/docs/cloud-messaging/migrate-v1",
-    defaultRoles: ["growth", "pm", "engineer"],
+    defaultRoles: ["growth", "pm", "engineer", "marketer", "marketing", "lifecycle", "retention", "crm", "mobile", "cmo"],
     credentialFields: [
       { key: "serviceAccountJson", label: "Service Account JSON", kind: "textarea", required: true, help: "The full JSON file downloaded from Firebase" },
     ],
     metadataFields: [
       { key: "projectId", label: "Project ID", kind: "text", required: true, placeholder: "my-project-id" },
     ],
-    tools: ["paperclipFirebasePush"],
+    tools: ["paperclipFirebasePush", "paperclipFirebaseSubscribeTopic"],
   },
 ];
 

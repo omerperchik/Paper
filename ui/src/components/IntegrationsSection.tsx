@@ -8,7 +8,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
-import { Plug, CheckCircle2, AlertCircle, Trash2, Link2 } from "lucide-react";
+import { Plug, CheckCircle2, AlertCircle, Trash2, Link2, MessageSquare, X } from "lucide-react";
 import { useToast } from "../context/ToastContext";
 import { agentsApi } from "../api/agents";
 import {
@@ -16,6 +16,7 @@ import {
   type IntegrationProviderDescriptor,
   type IntegrationProviderField,
   type IntegrationAccountDto,
+  type IntegrationRequestDto,
 } from "../api/integrations";
 
 interface Props {
@@ -37,6 +38,11 @@ export function IntegrationsSection({ companyId }: Props) {
   const agentsQuery = useQuery({
     queryKey: ["integrations", "agents", companyId],
     queryFn: () => agentsApi.list(companyId),
+  });
+  const requestsQuery = useQuery({
+    queryKey: ["integrations", "requests", companyId],
+    queryFn: () => integrationsApi.listRequests(companyId, "pending"),
+    refetchInterval: 30_000,
   });
 
   const [openProvider, setOpenProvider] = useState<IntegrationProviderDescriptor | null>(
@@ -102,14 +108,97 @@ export function IntegrationsSection({ companyId }: Props) {
     },
   });
 
+  const declineRequestMutation = useMutation({
+    mutationFn: (requestId: string) =>
+      integrationsApi.resolveRequest(companyId, requestId, "declined"),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["integrations", "requests", companyId] });
+      pushToast({ title: "Request declined", tone: "success" });
+    },
+    onError: (err: unknown) => {
+      pushToast({
+        title: "Failed to decline request",
+        body: err instanceof Error ? err.message : String(err),
+        tone: "error",
+      });
+    },
+  });
+
   const providers = providersQuery.data ?? [];
   const agents = agentsQuery.data ?? [];
+  const pendingRequests: IntegrationRequestDto[] = requestsQuery.data ?? [];
 
   return (
     <div className="space-y-4" data-testid="company-settings-integrations-section">
       <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
         Integrations
       </div>
+
+      {pendingRequests.length > 0 ? (
+        <div
+          className="rounded-md border border-amber-500/40 bg-amber-500/5 px-4 py-3 space-y-2"
+          data-testid="integration-requests-banner"
+        >
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <MessageSquare className="h-4 w-4 text-amber-500" />
+            Agent requests ({pendingRequests.length})
+          </div>
+          <div className="space-y-2">
+            {pendingRequests.map((req) => {
+              const agent = agents.find((a) => a.id === req.agentId);
+              const descriptor = providers.find((p) => p.provider === req.provider);
+              return (
+                <div
+                  key={req.id}
+                  className="rounded border border-border/60 bg-background p-2.5 text-xs space-y-1"
+                  data-testid={`integration-request-${req.id}`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="font-medium">
+                        {agent?.name ?? req.agentId.slice(0, 8)} needs{" "}
+                        <span className="font-mono">
+                          {descriptor?.name ?? req.provider}
+                        </span>
+                      </div>
+                      <div className="mt-0.5 text-muted-foreground whitespace-pre-wrap">
+                        {req.reason}
+                      </div>
+                      <div className="mt-0.5 text-[10px] text-muted-foreground">
+                        {new Date(req.createdAt).toLocaleString()}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      {descriptor ? (
+                        <Button
+                          size="sm"
+                          variant="default"
+                          className="h-7 px-2 text-xs"
+                          onClick={() => {
+                            setEditingAccount(null);
+                            setOpenProvider(descriptor);
+                          }}
+                        >
+                          Connect now
+                        </Button>
+                      ) : null}
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 px-2 text-xs"
+                        onClick={() => declineRequestMutation.mutate(req.id)}
+                        disabled={declineRequestMutation.isPending}
+                      >
+                        <X className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
 
       <div className="rounded-md border border-border px-4 py-4 space-y-3">
         <p className="text-sm text-muted-foreground">

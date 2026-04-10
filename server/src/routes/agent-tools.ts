@@ -28,6 +28,7 @@ import { webSearch, formatSearchResultsForPrompt } from "../services/web-search.
 import { unauthorized, unprocessable } from "../errors.js";
 import {
   integrationService,
+  SUPPORTED_PROVIDERS,
   type IntegrationProvider,
 } from "../services/integrations.js";
 import * as drivers from "../services/integration-providers/drivers.js";
@@ -1090,6 +1091,34 @@ export function agentToolRoutes(db: Db) {
     await callProvider(req, res, "google_ads", args, drivers.googleAdsGetPerformance);
   });
 
+  router.post("/agent-tools/google-ads-list-campaigns", async (req, res) => {
+    await callProvider(req, res, "google_ads", {}, drivers.googleAdsListCampaigns);
+  });
+
+  router.post("/agent-tools/google-ads-update-campaign-status", async (req, res) => {
+    const schema = z.object({
+      campaignId: z.string().min(1),
+      status: z.enum(["ENABLED", "PAUSED", "REMOVED"]),
+    });
+    const args = schema.parse(req.body);
+    await callProvider(req, res, "google_ads", args, drivers.googleAdsUpdateCampaignStatus);
+  });
+
+  router.post("/agent-tools/google-ads-update-campaign-budget", async (req, res) => {
+    const schema = z.object({
+      budgetId: z.string().min(1),
+      amountMicros: z.number().int().positive(),
+    });
+    const args = schema.parse(req.body);
+    await callProvider(req, res, "google_ads", args, drivers.googleAdsUpdateCampaignBudget);
+  });
+
+  router.post("/agent-tools/google-ads-get-search-terms", async (req, res) => {
+    const schema = z.object({ days: z.number().int().min(1).max(90).optional() });
+    const args = schema.parse(req.body ?? {});
+    await callProvider(req, res, "google_ads", args, drivers.googleAdsGetSearchTerms);
+  });
+
   // ---- Facebook Ads ----
   router.post("/agent-tools/facebook-ads-create-campaign", async (req, res) => {
     const schema = z.object({
@@ -1107,9 +1136,44 @@ export function agentToolRoutes(db: Db) {
     await callProvider(req, res, "facebook_ads", args, drivers.facebookAdsGetInsights);
   });
 
+  router.post("/agent-tools/facebook-ads-list-campaigns", async (req, res) => {
+    await callProvider(req, res, "facebook_ads", {}, drivers.facebookAdsListCampaigns);
+  });
+
+  router.post("/agent-tools/facebook-ads-update-campaign-status", async (req, res) => {
+    const schema = z.object({
+      campaignId: z.string().min(1),
+      status: z.enum(["ACTIVE", "PAUSED", "ARCHIVED"]),
+    });
+    const args = schema.parse(req.body);
+    await callProvider(req, res, "facebook_ads", args, drivers.facebookAdsUpdateCampaignStatus);
+  });
+
+  router.post("/agent-tools/facebook-ads-create-ad-set", async (req, res) => {
+    const schema = z.object({
+      campaignId: z.string().min(1),
+      name: z.string().min(1).max(200),
+      dailyBudgetCents: z.number().int().positive(),
+      billingEvent: z.string().optional(),
+      optimizationGoal: z.string().optional(),
+      bidAmountCents: z.number().int().positive().optional(),
+      countries: z.array(z.string()).optional(),
+      ageMin: z.number().int().min(13).max(65).optional(),
+      ageMax: z.number().int().min(13).max(65).optional(),
+      interestIds: z.array(z.string()).optional(),
+      startTime: z.string().optional(),
+    });
+    const args = schema.parse(req.body);
+    await callProvider(req, res, "facebook_ads", args, drivers.facebookAdsCreateAdSet);
+  });
+
   // ---- X (Twitter) ----
   router.post("/agent-tools/x-post", async (req, res) => {
-    const schema = z.object({ text: z.string().min(1).max(280) });
+    const schema = z.object({
+      text: z.string().min(1).max(280),
+      inReplyToTweetId: z.string().optional(),
+      quoteTweetId: z.string().optional(),
+    });
     const args = schema.parse(req.body);
     await callProvider(req, res, "x", args, drivers.xPost);
   });
@@ -1123,6 +1187,14 @@ export function agentToolRoutes(db: Db) {
     await callProvider(req, res, "x", args, drivers.xSearch);
   });
 
+  router.post("/agent-tools/x-get-tweet-metrics", async (req, res) => {
+    const schema = z.object({
+      tweetIds: z.array(z.string().min(1)).min(1).max(100),
+    });
+    const args = schema.parse(req.body);
+    await callProvider(req, res, "x", args, drivers.xGetTweetMetrics);
+  });
+
   // ---- Reddit ----
   router.post("/agent-tools/reddit-post", async (req, res) => {
     const schema = z.object({
@@ -1134,6 +1206,26 @@ export function agentToolRoutes(db: Db) {
     });
     const args = schema.parse(req.body);
     await callProvider(req, res, "reddit", args, drivers.redditPost);
+  });
+
+  router.post("/agent-tools/reddit-comment", async (req, res) => {
+    const schema = z.object({
+      parentFullname: z.string().min(1),
+      text: z.string().min(1).max(10000),
+    });
+    const args = schema.parse(req.body);
+    await callProvider(req, res, "reddit", args, drivers.redditComment);
+  });
+
+  router.post("/agent-tools/reddit-search", async (req, res) => {
+    const schema = z.object({
+      query: z.string().min(1).max(512),
+      subreddit: z.string().optional(),
+      sort: z.enum(["relevance", "hot", "top", "new"]).optional(),
+      limit: z.number().int().min(1).max(100).optional(),
+    });
+    const args = schema.parse(req.body);
+    await callProvider(req, res, "reddit", args, drivers.redditSearch);
   });
 
   // ---- TikTok Ads ----
@@ -1151,6 +1243,19 @@ export function agentToolRoutes(db: Db) {
     const schema = z.object({ days: z.number().int().min(1).max(90).optional() });
     const args = schema.parse(req.body ?? {});
     await callProvider(req, res, "tiktok_ads", args, drivers.tiktokAdsGetReport);
+  });
+
+  router.post("/agent-tools/tiktok-ads-list-campaigns", async (req, res) => {
+    await callProvider(req, res, "tiktok_ads", {}, drivers.tiktokAdsListCampaigns);
+  });
+
+  router.post("/agent-tools/tiktok-ads-update-campaign-status", async (req, res) => {
+    const schema = z.object({
+      campaignIds: z.array(z.string().min(1)).min(1).max(20),
+      status: z.enum(["ENABLE", "DISABLE", "DELETE"]),
+    });
+    const args = schema.parse(req.body);
+    await callProvider(req, res, "tiktok_ads", args, drivers.tiktokAdsUpdateCampaignStatus);
   });
 
   // ---- GitHub ----
@@ -1192,6 +1297,42 @@ export function agentToolRoutes(db: Db) {
     await callProvider(req, res, "wordpress", args, drivers.wordpressPublish);
   });
 
+  router.post("/agent-tools/wordpress-update-post", async (req, res) => {
+    const schema = z.object({
+      postId: z.number().int().positive(),
+      title: z.string().max(300).optional(),
+      content: z.string().optional(),
+      status: z.enum(["draft", "publish", "pending"]).optional(),
+      featuredMediaId: z.number().int().optional(),
+      categories: z.array(z.number().int()).optional(),
+      tags: z.array(z.number().int()).optional(),
+    });
+    const args = schema.parse(req.body);
+    await callProvider(req, res, "wordpress", args, drivers.wordpressUpdatePost);
+  });
+
+  router.post("/agent-tools/wordpress-list-posts", async (req, res) => {
+    const schema = z.object({
+      search: z.string().optional(),
+      status: z.string().optional(),
+      perPage: z.number().int().min(1).max(100).optional(),
+      page: z.number().int().min(1).optional(),
+    });
+    const args = schema.parse(req.body ?? {});
+    await callProvider(req, res, "wordpress", args, drivers.wordpressListPosts);
+  });
+
+  router.post("/agent-tools/wordpress-upload-media", async (req, res) => {
+    const schema = z.object({
+      filename: z.string().min(1).max(256),
+      contentType: z.string().min(1),
+      dataBase64: z.string().min(1),
+      altText: z.string().max(512).optional(),
+    });
+    const args = schema.parse(req.body);
+    await callProvider(req, res, "wordpress", args, drivers.wordpressUploadMedia);
+  });
+
   // ---- MakeUGC ----
   router.post("/agent-tools/make-ugc-generate", async (req, res) => {
     const schema = z.object({
@@ -1201,6 +1342,12 @@ export function agentToolRoutes(db: Db) {
     });
     const args = schema.parse(req.body);
     await callProvider(req, res, "make_ugc", args, drivers.makeUgcGenerate);
+  });
+
+  router.post("/agent-tools/make-ugc-get-status", async (req, res) => {
+    const schema = z.object({ videoId: z.string().min(1) });
+    const args = schema.parse(req.body);
+    await callProvider(req, res, "make_ugc", args, drivers.makeUgcGetStatus);
   });
 
   // ---- Salesforce Marketing Cloud ----
@@ -1230,6 +1377,62 @@ export function agentToolRoutes(db: Db) {
       });
     const args = schema.parse(req.body);
     await callProvider(req, res, "firebase", args, drivers.firebasePush);
+  });
+
+  // ---- Request a new integration ----
+  // Agents call this mid-task when they discover they need a provider
+  // that isn't yet connected. Inserts a pending row into
+  // integration_requests, which the Settings → Integrations UI surfaces
+  // at the top with a "Connect now" CTA.
+  router.post("/agent-tools/request-integration", async (req, res) => {
+    const schema = z.object({
+      provider: z.enum(SUPPORTED_PROVIDERS),
+      reason: z.string().min(5).max(2000),
+    });
+    const parse = schema.safeParse(req.body);
+    if (!parse.success) {
+      res.json(
+        toolResponse.fail({
+          code: "invalid_args",
+          message: `Invalid request: ${parse.error.errors.map((e) => e.message).join("; ")}`,
+        }),
+      );
+      return;
+    }
+    try {
+      const { agentId, companyId } = requireAgentActor(req);
+      const request = await integrationSvc.requestIntegration(
+        companyId,
+        agentId,
+        parse.data.provider,
+        parse.data.reason,
+      );
+      res.json(
+        toolResponse.ok({
+          data: { requestId: request.id, provider: request.provider, status: request.status },
+          message: `Integration request for ${parse.data.provider} filed. An operator will review it in Settings → Integrations.`,
+          nextHint:
+            "Continue with other work you can do without this integration. The operator will be notified.",
+        }),
+      );
+    } catch (err) {
+      res.json(
+        toolResponse.fail({
+          code: "request_integration_failed",
+          message: err instanceof Error ? err.message : String(err),
+        }),
+      );
+    }
+  });
+
+  router.post("/agent-tools/firebase-subscribe-topic", async (req, res) => {
+    const schema = z.object({
+      topic: z.string().min(1).max(200),
+      tokens: z.array(z.string().min(1)).min(1).max(1000),
+      unsubscribe: z.boolean().optional(),
+    });
+    const args = schema.parse(req.body);
+    await callProvider(req, res, "firebase", args, drivers.firebaseSubscribeToTopic);
   });
 
   return router;

@@ -116,6 +116,38 @@ export function integrationRoutes(db: Db) {
     },
   );
 
+  // ----- Integration requests (agent asks operator to connect something) -----
+
+  router.get("/companies/:companyId/integration-requests", async (req, res) => {
+    assertBoard(req);
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const status = req.query.status as "pending" | "fulfilled" | "declined" | undefined;
+    const rows = await svc.listRequests(companyId, status);
+    res.json(rows);
+  });
+
+  router.post(
+    "/companies/:companyId/integration-requests/:id/resolve",
+    async (req, res) => {
+      assertBoard(req);
+      const companyId = req.params.companyId as string;
+      assertCompanyAccess(req, companyId);
+      const status = (req.body as { status?: string } | null)?.status;
+      if (status !== "fulfilled" && status !== "declined") {
+        res.status(400).json({ error: "status must be fulfilled or declined" });
+        return;
+      }
+      await svc.resolveRequest(
+        companyId,
+        req.params.id as string,
+        status,
+        req.actor?.userId ?? null,
+      );
+      res.status(204).send();
+    },
+  );
+
   router.get(
     "/companies/:companyId/agents/:agentId/integrations",
     async (req, res) => {

@@ -51,6 +51,18 @@ export interface CreateIntegrationBody {
   metadata?: Record<string, unknown>;
 }
 
+export interface IntegrationRequestDto {
+  id: string;
+  companyId: string;
+  agentId: string;
+  provider: string;
+  reason: string;
+  status: "pending" | "fulfilled" | "declined";
+  createdAt: string;
+  resolvedAt: string | null;
+  resolvedBy: string | null;
+}
+
 export const integrationsApi = {
   providers: (companyId: string) =>
     api.get<IntegrationProviderDescriptor[]>(
@@ -74,5 +86,18 @@ export const integrationsApi = {
   listForAgent: (companyId: string, agentId: string) =>
     api.get<IntegrationAccountDto[]>(
       `/companies/${companyId}/agents/${agentId}/integrations`,
+    ),
+  listRequests: (companyId: string, status?: "pending" | "fulfilled" | "declined") =>
+    api.get<IntegrationRequestDto[]>(
+      `/companies/${companyId}/integration-requests${status ? `?status=${status}` : ""}`,
+    ),
+  resolveRequest: (
+    companyId: string,
+    requestId: string,
+    status: "fulfilled" | "declined",
+  ) =>
+    api.post<void>(
+      `/companies/${companyId}/integration-requests/${requestId}/resolve`,
+      { status },
     ),
 };

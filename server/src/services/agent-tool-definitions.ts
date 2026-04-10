@@ -674,6 +674,61 @@ export const DELEGATION_TOOL_DEFINITIONS: DelegationToolDefinition[] = [
   {
     type: "function",
     function: {
+      name: "paperclipGoogleAdsListCampaigns",
+      description:
+        "List all campaigns in the connected Google Ads account with id, name, status, and budget. Use this before updating or pausing a specific campaign.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipGoogleAdsUpdateCampaignStatus",
+      description:
+        "Pause, enable, or remove a Google Ads campaign. Use `paperclipGoogleAdsListCampaigns` first to get the campaignId.",
+      parameters: {
+        type: "object",
+        properties: {
+          campaignId: { type: "string" },
+          status: { type: "string", enum: ["ENABLED", "PAUSED", "REMOVED"] },
+        },
+        required: ["campaignId", "status"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipGoogleAdsUpdateCampaignBudget",
+      description:
+        "Update the daily budget of an existing Google Ads campaign budget. Amount in micros (USD × 1,000,000).",
+      parameters: {
+        type: "object",
+        properties: {
+          budgetId: { type: "string", description: "The campaign budget id (NOT the campaign id)." },
+          amountMicros: { type: "number" },
+        },
+        required: ["budgetId", "amountMicros"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipGoogleAdsGetSearchTerms",
+      description:
+        "Pull the search-terms report (actual queries users typed) with cost and conversions. Essential for finding negative keywords and wasted spend.",
+      parameters: {
+        type: "object",
+        properties: {
+          days: { type: "number", description: "7, 14, or 30. Defaults to 14." },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "paperclipFacebookAdsCreateCampaign",
       description:
         "Create a PAUSED Facebook (Meta) Ads campaign. Objective must be a valid Meta objective like OUTCOME_SALES, OUTCOME_LEADS, OUTCOME_AWARENESS.",
@@ -708,15 +763,81 @@ export const DELEGATION_TOOL_DEFINITIONS: DelegationToolDefinition[] = [
   {
     type: "function",
     function: {
+      name: "paperclipFacebookAdsListCampaigns",
+      description:
+        "List campaigns in the connected Meta ad account with id, name, status, objective, and budget.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipFacebookAdsUpdateCampaignStatus",
+      description: "Activate, pause, or archive a Meta Ads campaign.",
+      parameters: {
+        type: "object",
+        properties: {
+          campaignId: { type: "string" },
+          status: { type: "string", enum: ["ACTIVE", "PAUSED", "ARCHIVED"] },
+        },
+        required: ["campaignId", "status"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipFacebookAdsCreateAdSet",
+      description:
+        "Create a PAUSED Meta Ads ad set under an existing campaign. Ad sets hold the targeting (geo, age, interests), budget, and optimization goal. A campaign without an ad set cannot run.",
+      parameters: {
+        type: "object",
+        properties: {
+          campaignId: { type: "string" },
+          name: { type: "string" },
+          dailyBudgetCents: { type: "number", description: "Daily budget in cents." },
+          billingEvent: { type: "string", description: "IMPRESSIONS | LINK_CLICKS (default IMPRESSIONS)." },
+          optimizationGoal: { type: "string", description: "LINK_CLICKS | REACH | OFFSITE_CONVERSIONS | LANDING_PAGE_VIEWS (default LINK_CLICKS)." },
+          bidAmountCents: { type: "number" },
+          countries: { type: "array", items: { type: "string" }, description: "ISO country codes. Default ['US']." },
+          ageMin: { type: "number" },
+          ageMax: { type: "number" },
+          interestIds: { type: "array", items: { type: "string" }, description: "Meta interest targeting ids." },
+          startTime: { type: "string", description: "ISO datetime. Defaults to now+60s." },
+        },
+        required: ["campaignId", "name", "dailyBudgetCents"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "paperclipXPost",
       description:
-        "Post a tweet on X (Twitter) from the connected account. Max 280 characters. Use sparingly — every post is public.",
+        "Post a tweet on X (Twitter) from the connected account. Max 280 characters. Supports reply threads via inReplyToTweetId and quote tweets via quoteTweetId. Use sparingly — every post is public.",
       parameters: {
         type: "object",
         properties: {
           text: { type: "string", description: "Tweet body, ≤280 chars." },
+          inReplyToTweetId: { type: "string", description: "Set to continue a thread or reply to another tweet." },
+          quoteTweetId: { type: "string", description: "Set to quote-tweet another tweet." },
         },
         required: ["text"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipXGetTweetMetrics",
+      description:
+        "Get engagement metrics (impressions, likes, replies, retweets, bookmarks) for up to 100 tweets by id. Use with paperclipXSearch to measure what's resonating.",
+      parameters: {
+        type: "object",
+        properties: {
+          tweetIds: { type: "array", items: { type: "string" }, description: "1–100 tweet ids." },
+        },
+        required: ["tweetIds"],
       },
     },
   },
@@ -758,6 +879,40 @@ export const DELEGATION_TOOL_DEFINITIONS: DelegationToolDefinition[] = [
   {
     type: "function",
     function: {
+      name: "paperclipRedditComment",
+      description:
+        "Reply to a Reddit post or comment. parentFullname must be the Reddit 'fullname' — t3_<id> for a post, t1_<id> for a comment.",
+      parameters: {
+        type: "object",
+        properties: {
+          parentFullname: { type: "string", description: "t3_<id> for a post, t1_<id> for a comment." },
+          text: { type: "string" },
+        },
+        required: ["parentFullname", "text"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipRedditSearch",
+      description:
+        "Search Reddit posts globally or within a subreddit. Returns post ids, titles, scores, and subreddits. Use to find high-signal threads to engage.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string" },
+          subreddit: { type: "string", description: "Optional: restrict to this subreddit." },
+          sort: { type: "string", enum: ["relevance", "hot", "top", "new"] },
+          limit: { type: "number", description: "1–100. Defaults to 25." },
+        },
+        required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "paperclipTikTokAdsCreateCampaign",
       description:
         "Create a DISABLED TikTok Ads campaign on the connected advertiser. Starts disabled — operator must enable.",
@@ -786,6 +941,29 @@ export const DELEGATION_TOOL_DEFINITIONS: DelegationToolDefinition[] = [
         properties: {
           days: { type: "number", description: "1–90. Defaults to 7." },
         },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipTikTokAdsListCampaigns",
+      description: "List campaigns for the connected TikTok advertiser.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipTikTokAdsUpdateCampaignStatus",
+      description: "Enable, disable, or delete one or more TikTok Ads campaigns.",
+      parameters: {
+        type: "object",
+        properties: {
+          campaignIds: { type: "array", items: { type: "string" } },
+          status: { type: "string", enum: ["ENABLE", "DISABLE", "DELETE"] },
+        },
+        required: ["campaignIds", "status"],
       },
     },
   },
@@ -849,6 +1027,62 @@ export const DELEGATION_TOOL_DEFINITIONS: DelegationToolDefinition[] = [
   {
     type: "function",
     function: {
+      name: "paperclipWordpressUpdatePost",
+      description:
+        "Update an existing WordPress post by id. Any field left undefined is kept as-is. Use to iterate on previously drafted content.",
+      parameters: {
+        type: "object",
+        properties: {
+          postId: { type: "number" },
+          title: { type: "string" },
+          content: { type: "string" },
+          status: { type: "string", enum: ["draft", "publish", "pending"] },
+          featuredMediaId: { type: "number", description: "Media attachment id for the featured image." },
+          categories: { type: "array", items: { type: "number" } },
+          tags: { type: "array", items: { type: "number" } },
+        },
+        required: ["postId"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipWordpressListPosts",
+      description:
+        "List WordPress posts. Use before creating a new post to avoid duplicates, or to find a post id to update.",
+      parameters: {
+        type: "object",
+        properties: {
+          search: { type: "string", description: "Free-text search across title + content." },
+          status: { type: "string", description: "draft | publish | pending | any." },
+          perPage: { type: "number", description: "1–100. Defaults to 20." },
+          page: { type: "number" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipWordpressUploadMedia",
+      description:
+        "Upload an image or file to the WordPress media library. Returns the media id which can be used as featuredMediaId in paperclipWordpressUpdatePost. dataBase64 is the file contents base64-encoded.",
+      parameters: {
+        type: "object",
+        properties: {
+          filename: { type: "string" },
+          contentType: { type: "string", description: "e.g. image/jpeg, image/png." },
+          dataBase64: { type: "string", description: "File bytes, base64-encoded." },
+          altText: { type: "string", description: "Alt text for accessibility + SEO." },
+        },
+        required: ["filename", "contentType", "dataBase64"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "paperclipMakeUgcGenerate",
       description:
         "Generate a UGC-style AI video from a script using MakeUGC. Returns a job id or video URL depending on the plan. Use for rapid ad-creative iteration.",
@@ -860,6 +1094,21 @@ export const DELEGATION_TOOL_DEFINITIONS: DelegationToolDefinition[] = [
           voiceId: { type: "string" },
         },
         required: ["script"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipMakeUgcGetStatus",
+      description:
+        "Check the status of a MakeUGC video generation job by id. Video generation is async — poll this until status is 'done' and a download URL is returned.",
+      parameters: {
+        type: "object",
+        properties: {
+          videoId: { type: "string" },
+        },
+        required: ["videoId"],
       },
     },
   },
@@ -900,6 +1149,58 @@ export const DELEGATION_TOOL_DEFINITIONS: DelegationToolDefinition[] = [
           data: { type: "object", description: "Extra key/value data payload (strings only)." },
         },
         required: ["title", "body"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipRequestIntegration",
+      description:
+        "File a request asking the operator to connect a new integration. Use this when you are mid-task and discover you need a provider (e.g. google_ads, facebook_ads, x, reddit, tiktok_ads, github, wordpress, make_ugc, sfmc, firebase) that is not yet connected for this company. The operator will see your request in Settings → Integrations with a one-click 'Connect now' CTA. Provide a crisp reason — the operator decides whether to approve.",
+      parameters: {
+        type: "object",
+        properties: {
+          provider: {
+            type: "string",
+            enum: [
+              "google_ads",
+              "facebook_ads",
+              "x",
+              "reddit",
+              "tiktok_ads",
+              "github",
+              "wordpress",
+              "make_ugc",
+              "sfmc",
+              "firebase",
+            ],
+            description: "The provider you need connected.",
+          },
+          reason: {
+            type: "string",
+            description:
+              "2–3 sentences: what task you're trying to complete, and why this provider is blocking it. This text is shown verbatim to the operator.",
+          },
+        },
+        required: ["provider", "reason"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipFirebaseSubscribeTopic",
+      description:
+        "Subscribe (or unsubscribe with `unsubscribe: true`) up to 1000 device tokens to an FCM topic. Use this to segment users for targeted push campaigns.",
+      parameters: {
+        type: "object",
+        properties: {
+          topic: { type: "string" },
+          tokens: { type: "array", items: { type: "string" } },
+          unsubscribe: { type: "boolean", description: "If true, removes tokens from the topic instead." },
+        },
+        required: ["topic", "tokens"],
       },
     },
   },

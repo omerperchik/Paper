@@ -182,6 +182,147 @@ export async function googleAdsCreateCampaign(
   }
 }
 
+export async function googleAdsListCampaigns(
+  creds: Creds,
+  meta: Meta,
+  _args: Record<string, never>,
+): Promise<DriverResult> {
+  try {
+    const accessToken = await googleAdsAccessToken(creds);
+    const developerToken = requireStr(creds, "developerToken");
+    const customerId = requireStr(meta, "customerId").replace(/-/g, "");
+    const loginCustomerId = str(meta.loginCustomerId).replace(/-/g, "");
+    const headers: Record<string, string> = {
+      authorization: `Bearer ${accessToken}`,
+      "developer-token": developerToken,
+    };
+    if (loginCustomerId) headers["login-customer-id"] = loginCustomerId;
+    const gaql = `
+      SELECT campaign.id, campaign.name, campaign.status, campaign.advertising_channel_type,
+             campaign_budget.amount_micros
+      FROM campaign
+      ORDER BY campaign.id
+    `.trim();
+    return fetchJson(
+      "POST",
+      `https://googleads.googleapis.com/v18/customers/${customerId}/googleAds:search`,
+      headers,
+      { query: gaql },
+    );
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function googleAdsUpdateCampaignStatus(
+  creds: Creds,
+  meta: Meta,
+  args: { campaignId: string; status: "ENABLED" | "PAUSED" | "REMOVED" },
+): Promise<DriverResult> {
+  try {
+    const accessToken = await googleAdsAccessToken(creds);
+    const developerToken = requireStr(creds, "developerToken");
+    const customerId = requireStr(meta, "customerId").replace(/-/g, "");
+    const loginCustomerId = str(meta.loginCustomerId).replace(/-/g, "");
+    const headers: Record<string, string> = {
+      authorization: `Bearer ${accessToken}`,
+      "developer-token": developerToken,
+    };
+    if (loginCustomerId) headers["login-customer-id"] = loginCustomerId;
+    return fetchJson(
+      "POST",
+      `https://googleads.googleapis.com/v18/customers/${customerId}/campaigns:mutate`,
+      headers,
+      {
+        operations: [
+          {
+            update: {
+              resourceName: `customers/${customerId}/campaigns/${args.campaignId}`,
+              status: args.status,
+            },
+            updateMask: "status",
+          },
+        ],
+      },
+    );
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function googleAdsUpdateCampaignBudget(
+  creds: Creds,
+  meta: Meta,
+  args: { budgetId: string; amountMicros: number },
+): Promise<DriverResult> {
+  try {
+    const accessToken = await googleAdsAccessToken(creds);
+    const developerToken = requireStr(creds, "developerToken");
+    const customerId = requireStr(meta, "customerId").replace(/-/g, "");
+    const loginCustomerId = str(meta.loginCustomerId).replace(/-/g, "");
+    const headers: Record<string, string> = {
+      authorization: `Bearer ${accessToken}`,
+      "developer-token": developerToken,
+    };
+    if (loginCustomerId) headers["login-customer-id"] = loginCustomerId;
+    return fetchJson(
+      "POST",
+      `https://googleads.googleapis.com/v18/customers/${customerId}/campaignBudgets:mutate`,
+      headers,
+      {
+        operations: [
+          {
+            update: {
+              resourceName: `customers/${customerId}/campaignBudgets/${args.budgetId}`,
+              amountMicros: args.amountMicros,
+            },
+            updateMask: "amount_micros",
+          },
+        ],
+      },
+    );
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function googleAdsGetSearchTerms(
+  creds: Creds,
+  meta: Meta,
+  args: { days?: number },
+): Promise<DriverResult> {
+  try {
+    const accessToken = await googleAdsAccessToken(creds);
+    const developerToken = requireStr(creds, "developerToken");
+    const customerId = requireStr(meta, "customerId").replace(/-/g, "");
+    const loginCustomerId = str(meta.loginCustomerId).replace(/-/g, "");
+    const headers: Record<string, string> = {
+      authorization: `Bearer ${accessToken}`,
+      "developer-token": developerToken,
+    };
+    if (loginCustomerId) headers["login-customer-id"] = loginCustomerId;
+    const days = Math.max(1, Math.min(90, args.days ?? 14));
+    const literal = days <= 7 ? "LAST_7_DAYS" : days <= 14 ? "LAST_14_DAYS" : "LAST_30_DAYS";
+    const gaql = `
+      SELECT search_term_view.search_term, campaign.name,
+             metrics.impressions, metrics.clicks, metrics.cost_micros,
+             metrics.conversions, metrics.ctr
+      FROM search_term_view
+      WHERE segments.date DURING ${literal}
+      ORDER BY metrics.cost_micros DESC
+      LIMIT 200
+    `.trim();
+    return fetchJson(
+      "POST",
+      `https://googleads.googleapis.com/v18/customers/${customerId}/googleAds:search`,
+      headers,
+      { query: gaql },
+    );
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 export async function googleAdsGetPerformance(
   creds: Creds,
   meta: Meta,
@@ -245,6 +386,94 @@ export async function facebookAdsCreateCampaign(
         special_ad_categories: [],
         daily_budget: args.dailyBudgetCents,
       },
+    );
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function facebookAdsListCampaigns(
+  creds: Creds,
+  meta: Meta,
+  _args: Record<string, never>,
+): Promise<DriverResult> {
+  try {
+    const accessToken = requireStr(creds, "accessToken");
+    const adAccountId = requireStr(meta, "adAccountId");
+    const apiVersion = str(meta.apiVersion, "v21.0");
+    const url = `https://graph.facebook.com/${apiVersion}/${adAccountId}/campaigns?fields=id,name,status,objective,daily_budget,lifetime_budget,created_time&limit=200`;
+    return fetchJson("GET", url, { authorization: `Bearer ${accessToken}` });
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function facebookAdsUpdateCampaignStatus(
+  creds: Creds,
+  _meta: Meta,
+  args: { campaignId: string; status: "ACTIVE" | "PAUSED" | "ARCHIVED" },
+): Promise<DriverResult> {
+  try {
+    const accessToken = requireStr(creds, "accessToken");
+    const apiVersion = "v21.0";
+    return fetchJson(
+      "POST",
+      `https://graph.facebook.com/${apiVersion}/${encodeURIComponent(args.campaignId)}`,
+      { authorization: `Bearer ${accessToken}` },
+      { status: args.status },
+    );
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function facebookAdsCreateAdSet(
+  creds: Creds,
+  meta: Meta,
+  args: {
+    campaignId: string;
+    name: string;
+    dailyBudgetCents: number;
+    billingEvent?: string;
+    optimizationGoal?: string;
+    bidAmountCents?: number;
+    countries?: string[];
+    ageMin?: number;
+    ageMax?: number;
+    interestIds?: string[];
+    startTime?: string;
+  },
+): Promise<DriverResult> {
+  try {
+    const accessToken = requireStr(creds, "accessToken");
+    const adAccountId = requireStr(meta, "adAccountId");
+    const apiVersion = str(meta.apiVersion, "v21.0");
+    const targeting: Record<string, unknown> = {
+      geo_locations: { countries: args.countries ?? ["US"] },
+      age_min: args.ageMin ?? 18,
+      age_max: args.ageMax ?? 65,
+    };
+    if (args.interestIds && args.interestIds.length > 0) {
+      targeting.flexible_spec = [
+        { interests: args.interestIds.map((id) => ({ id })) },
+      ];
+    }
+    const body: Record<string, unknown> = {
+      name: args.name,
+      campaign_id: args.campaignId,
+      daily_budget: args.dailyBudgetCents,
+      billing_event: args.billingEvent ?? "IMPRESSIONS",
+      optimization_goal: args.optimizationGoal ?? "LINK_CLICKS",
+      targeting,
+      status: "PAUSED",
+      start_time: args.startTime ?? new Date(Date.now() + 60_000).toISOString(),
+    };
+    if (args.bidAmountCents != null) body.bid_amount = args.bidAmountCents;
+    return fetchJson(
+      "POST",
+      `https://graph.facebook.com/${apiVersion}/${adAccountId}/adsets`,
+      { authorization: `Bearer ${accessToken}` },
+      body,
     );
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -321,7 +550,7 @@ async function oauth1Header(
 export async function xPost(
   creds: Creds,
   _meta: Meta,
-  args: { text: string },
+  args: { text: string; inReplyToTweetId?: string; quoteTweetId?: string },
 ): Promise<DriverResult> {
   try {
     const c = {
@@ -332,13 +561,54 @@ export async function xPost(
     };
     const url = "https://api.x.com/2/tweets";
     const authHeader = await oauth1Header("POST", url, {}, c);
+    const body: Record<string, unknown> = { text: args.text };
+    if (args.inReplyToTweetId) {
+      body.reply = { in_reply_to_tweet_id: args.inReplyToTweetId };
+    }
+    if (args.quoteTweetId) body.quote_tweet_id = args.quoteTweetId;
     const res = await fetch(url, {
       method: "POST",
       headers: {
         authorization: authHeader,
         "content-type": "application/json",
       },
-      body: JSON.stringify({ text: args.text }),
+      body: JSON.stringify(body),
+    });
+    const data: unknown = await res.json();
+    if (!res.ok) {
+      return { ok: false, error: `${res.status}: ${JSON.stringify(data).slice(0, 500)}`, status: res.status };
+    }
+    return { ok: true, data, status: res.status };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function xGetTweetMetrics(
+  creds: Creds,
+  _meta: Meta,
+  args: { tweetIds: string[] },
+): Promise<DriverResult> {
+  try {
+    const c = {
+      apiKey: requireStr(creds, "apiKey"),
+      apiSecret: requireStr(creds, "apiSecret"),
+      accessToken: requireStr(creds, "accessToken"),
+      accessSecret: requireStr(creds, "accessSecret"),
+    };
+    if (!args.tweetIds || args.tweetIds.length === 0) {
+      return { ok: false, error: "tweetIds is required" };
+    }
+    const url = "https://api.x.com/2/tweets";
+    const params = {
+      ids: args.tweetIds.join(","),
+      "tweet.fields": "public_metrics,non_public_metrics,organic_metrics,created_at",
+    };
+    const authHeader = await oauth1Header("GET", url, params, c);
+    const qs = new URLSearchParams(params).toString();
+    const res = await fetch(`${url}?${qs}`, {
+      method: "GET",
+      headers: { authorization: authHeader },
     });
     const data: unknown = await res.json();
     if (!res.ok) {
@@ -443,6 +713,55 @@ export async function redditPost(
   }
 }
 
+export async function redditComment(
+  creds: Creds,
+  meta: Meta,
+  args: { parentFullname: string; text: string },
+): Promise<DriverResult> {
+  try {
+    const { token, userAgent } = await redditAccessToken(creds, meta);
+    // parentFullname format: t1_<commentId> for a comment, t3_<linkId> for a post
+    return fetchForm(
+      "POST",
+      "https://oauth.reddit.com/api/comment",
+      {
+        authorization: `Bearer ${token}`,
+        "user-agent": userAgent,
+      },
+      { thing_id: args.parentFullname, text: args.text, api_type: "json" },
+    );
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function redditSearch(
+  creds: Creds,
+  meta: Meta,
+  args: { query: string; subreddit?: string; sort?: "relevance" | "hot" | "top" | "new"; limit?: number },
+): Promise<DriverResult> {
+  try {
+    const { token, userAgent } = await redditAccessToken(creds, meta);
+    const limit = Math.max(1, Math.min(100, args.limit ?? 25));
+    const qs = new URLSearchParams({
+      q: args.query,
+      sort: args.sort ?? "relevance",
+      limit: String(limit),
+      restrict_sr: args.subreddit ? "1" : "0",
+    });
+    const path = args.subreddit
+      ? `/r/${encodeURIComponent(args.subreddit)}/search.json?${qs}`
+      : `/search.json?${qs}`;
+    return fetchJson(
+      "GET",
+      `https://oauth.reddit.com${path}`,
+      { authorization: `Bearer ${token}`, "user-agent": userAgent },
+    );
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 // ============================================================
 // TikTok Ads
 // ============================================================
@@ -466,6 +785,44 @@ export async function tiktokAdsCreateCampaign(
         budget_mode: "BUDGET_MODE_DAY",
         budget: args.dailyBudgetUsd,
         operation_status: "DISABLE",
+      },
+    );
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function tiktokAdsListCampaigns(
+  creds: Creds,
+  meta: Meta,
+  _args: Record<string, never>,
+): Promise<DriverResult> {
+  try {
+    const accessToken = requireStr(creds, "accessToken");
+    const advertiserId = requireStr(meta, "advertiserId");
+    const url = `https://business-api.tiktok.com/open_api/v1.3/campaign/get/?advertiser_id=${advertiserId}&page_size=100`;
+    return fetchJson("GET", url, { "Access-Token": accessToken });
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function tiktokAdsUpdateCampaignStatus(
+  creds: Creds,
+  meta: Meta,
+  args: { campaignIds: string[]; status: "ENABLE" | "DISABLE" | "DELETE" },
+): Promise<DriverResult> {
+  try {
+    const accessToken = requireStr(creds, "accessToken");
+    const advertiserId = requireStr(meta, "advertiserId");
+    return fetchJson(
+      "POST",
+      "https://business-api.tiktok.com/open_api/v1.3/campaign/status/update/",
+      { "Access-Token": accessToken },
+      {
+        advertiser_id: advertiserId,
+        campaign_ids: args.campaignIds,
+        operation_status: args.status,
       },
     );
   } catch (err) {
@@ -599,6 +956,107 @@ export async function wordpressPublish(
   }
 }
 
+export async function wordpressUpdatePost(
+  creds: Creds,
+  meta: Meta,
+  args: {
+    postId: number;
+    title?: string;
+    content?: string;
+    status?: "draft" | "publish" | "pending";
+    featuredMediaId?: number;
+    categories?: number[];
+    tags?: number[];
+  },
+): Promise<DriverResult> {
+  try {
+    const username = requireStr(creds, "username");
+    const appPassword = requireStr(creds, "applicationPassword").replace(/\s+/g, "");
+    const siteUrl = requireStr(meta, "siteUrl").replace(/\/$/, "");
+    const basic = Buffer.from(`${username}:${appPassword}`).toString("base64");
+    const body: Record<string, unknown> = {};
+    if (args.title != null) body.title = args.title;
+    if (args.content != null) body.content = args.content;
+    if (args.status != null) body.status = args.status;
+    if (args.featuredMediaId != null) body.featured_media = args.featuredMediaId;
+    if (args.categories != null) body.categories = args.categories;
+    if (args.tags != null) body.tags = args.tags;
+    return fetchJson(
+      "POST",
+      `${siteUrl}/wp-json/wp/v2/posts/${args.postId}`,
+      { authorization: `Basic ${basic}` },
+      body,
+    );
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function wordpressListPosts(
+  creds: Creds,
+  meta: Meta,
+  args: { search?: string; status?: string; perPage?: number; page?: number },
+): Promise<DriverResult> {
+  try {
+    const username = requireStr(creds, "username");
+    const appPassword = requireStr(creds, "applicationPassword").replace(/\s+/g, "");
+    const siteUrl = requireStr(meta, "siteUrl").replace(/\/$/, "");
+    const basic = Buffer.from(`${username}:${appPassword}`).toString("base64");
+    const qs = new URLSearchParams();
+    if (args.search) qs.set("search", args.search);
+    if (args.status) qs.set("status", args.status);
+    qs.set("per_page", String(Math.max(1, Math.min(100, args.perPage ?? 20))));
+    if (args.page) qs.set("page", String(args.page));
+    qs.set("_fields", "id,date,status,link,title,excerpt");
+    return fetchJson(
+      "GET",
+      `${siteUrl}/wp-json/wp/v2/posts?${qs}`,
+      { authorization: `Basic ${basic}` },
+    );
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function wordpressUploadMedia(
+  creds: Creds,
+  meta: Meta,
+  args: { filename: string; contentType: string; dataBase64: string; altText?: string },
+): Promise<DriverResult> {
+  try {
+    const username = requireStr(creds, "username");
+    const appPassword = requireStr(creds, "applicationPassword").replace(/\s+/g, "");
+    const siteUrl = requireStr(meta, "siteUrl").replace(/\/$/, "");
+    const basic = Buffer.from(`${username}:${appPassword}`).toString("base64");
+    const bytes = Buffer.from(args.dataBase64, "base64");
+    const res = await fetch(`${siteUrl}/wp-json/wp/v2/media`, {
+      method: "POST",
+      headers: {
+        authorization: `Basic ${basic}`,
+        "content-type": args.contentType,
+        "content-disposition": `attachment; filename="${args.filename.replace(/"/g, "")}"`,
+      },
+      body: bytes,
+    });
+    const data: unknown = await res.json().catch(() => null);
+    if (!res.ok) {
+      return { ok: false, error: `${res.status}: ${JSON.stringify(data).slice(0, 500)}`, status: res.status };
+    }
+    // Optionally set alt_text after upload
+    if (args.altText && data && typeof data === "object" && "id" in data) {
+      const id = (data as { id: number }).id;
+      await fetch(`${siteUrl}/wp-json/wp/v2/media/${id}`, {
+        method: "POST",
+        headers: { authorization: `Basic ${basic}`, "content-type": "application/json" },
+        body: JSON.stringify({ alt_text: args.altText }),
+      });
+    }
+    return { ok: true, data, status: res.status };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 // ============================================================
 // MakeUGC
 // ============================================================
@@ -620,6 +1078,23 @@ export async function makeUgcGenerate(
         avatar_id: avatarId || undefined,
         voice_id: args.voiceId,
       },
+    );
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function makeUgcGetStatus(
+  creds: Creds,
+  _meta: Meta,
+  args: { videoId: string },
+): Promise<DriverResult> {
+  try {
+    const apiKey = requireStr(creds, "apiKey");
+    return fetchJson(
+      "GET",
+      `https://api.makeugc.com/v1/videos/${encodeURIComponent(args.videoId)}`,
+      { authorization: `Bearer ${apiKey}` },
     );
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -735,6 +1210,36 @@ async function firebaseAccessToken(creds: Creds): Promise<string> {
     throw new Error(`Firebase auth failed: ${data.error_description ?? res.status}`);
   }
   return data.access_token;
+}
+
+export async function firebaseSubscribeToTopic(
+  creds: Creds,
+  _meta: Meta,
+  args: { topic: string; tokens: string[]; unsubscribe?: boolean },
+): Promise<DriverResult> {
+  try {
+    const accessToken = await firebaseAccessToken(creds);
+    if (!args.tokens || args.tokens.length === 0) {
+      return { ok: false, error: "tokens is required" };
+    }
+    const path = args.unsubscribe
+      ? "iid/v1:batchRemove"
+      : "iid/v1:batchAdd";
+    return fetchJson(
+      "POST",
+      `https://iid.googleapis.com/${path}`,
+      {
+        authorization: `Bearer ${accessToken}`,
+        "access_token_auth": "true",
+      },
+      {
+        to: `/topics/${args.topic}`,
+        registration_tokens: args.tokens,
+      },
+    );
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 export async function firebasePush(

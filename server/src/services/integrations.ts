@@ -14,12 +14,14 @@
 // has no explicit binding, the route falls back to the first
 // company-wide account for that provider.
 
-import { and, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   integrationAccounts,
   integrationBindings,
+  integrationRequests,
   type IntegrationAccount,
+  type IntegrationRequest,
 } from "@paperclipai/db";
 import { secretService } from "./secrets.js";
 import { notFound, unprocessable } from "../errors.js";
@@ -202,6 +204,7 @@ export function integrationService(db: Db) {
         })
         .where(eq(integrationAccounts.id, existing.id))
         .returning();
+      await autoFulfillRequestsForProvider(companyId, input.provider);
       return toPublic(updated);
     }
 
@@ -216,6 +219,7 @@ export function integrationService(db: Db) {
         metadataJson: input.metadata ?? {},
       })
       .returning();
+    await autoFulfillRequestsForProvider(companyId, input.provider);
     return toPublic(inserted);
   }
 
@@ -385,6 +389,95 @@ export function integrationService(db: Db) {
       );
   }
 
+  // ----- Integration requests -----
+
+  async function requestIntegration(
+    companyId: string,
+    agentId: string,
+    provider: string,
+    reason: string,
+  ): Promise<IntegrationRequest> {
+    if (!isSupportedProvider(provider)) {
+      throw unprocessable(
+        `Unsupported provider: ${provider}. Valid: ${SUPPORTED_PROVIDERS.join(", ")}`,
+      );
+    }
+    const trimmed = (reason ?? "").trim();
+    if (!trimmed) {
+      throw unprocessable("reason is required — tell the operator why this integration is needed");
+    }
+    // Dedupe: if there's already a pending request from the same agent
+    // for the same provider, return it instead of inserting a duplicate.
+    const [existing] = await db
+      .select()
+      .from(integrationRequests)
+      .where(
+        and(
+          eq(integrationRequests.companyId, companyId),
+          eq(integrationRequests.agentId, agentId),
+          eq(integrationRequests.provider, provider),
+          eq(integrationRequests.status, "pending"),
+        ),
+      )
+      .limit(1);
+    if (existing) return existing;
+    const [inserted] = await db
+      .insert(integrationRequests)
+      .values({ companyId, agentId, provider, reason: trimmed })
+      .returning();
+    return inserted;
+  }
+
+  async function listRequests(
+    companyId: string,
+    status?: "pending" | "fulfilled" | "declined",
+  ): Promise<IntegrationRequest[]> {
+    const where = status
+      ? and(eq(integrationRequests.companyId, companyId), eq(integrationRequests.status, status))
+      : eq(integrationRequests.companyId, companyId);
+    return db
+      .select()
+      .from(integrationRequests)
+      .where(where)
+      .orderBy(desc(integrationRequests.createdAt));
+  }
+
+  async function resolveRequest(
+    companyId: string,
+    requestId: string,
+    status: "fulfilled" | "declined",
+    resolvedBy?: string | null,
+  ): Promise<void> {
+    await db
+      .update(integrationRequests)
+      .set({ status, resolvedAt: new Date(), resolvedBy: resolvedBy ?? null })
+      .where(
+        and(
+          eq(integrationRequests.id, requestId),
+          eq(integrationRequests.companyId, companyId),
+        ),
+      );
+  }
+
+  // When an operator successfully creates an account for a provider,
+  // auto-fulfill any pending requests for that provider from any agent
+  // in the company. Called from create().
+  async function autoFulfillRequestsForProvider(
+    companyId: string,
+    provider: string,
+  ): Promise<void> {
+    await db
+      .update(integrationRequests)
+      .set({ status: "fulfilled", resolvedAt: new Date() })
+      .where(
+        and(
+          eq(integrationRequests.companyId, companyId),
+          eq(integrationRequests.provider, provider),
+          eq(integrationRequests.status, "pending"),
+        ),
+      );
+  }
+
   return {
     list,
     getById,
@@ -398,5 +491,9 @@ export function integrationService(db: Db) {
     listAgentsForAccount,
     markError,
     markVerified,
+    requestIntegration,
+    listRequests,
+    resolveRequest,
+    autoFulfillRequestsForProvider,
   };
 }

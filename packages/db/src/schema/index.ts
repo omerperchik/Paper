@@ -32,6 +32,8 @@ export { integrationAccounts } from "./integration_accounts.js";
 export type { IntegrationAccount, NewIntegrationAccount } from "./integration_accounts.js";
 export { integrationBindings } from "./integration_bindings.js";
 export type { IntegrationBinding, NewIntegrationBinding } from "./integration_bindings.js";
+export { integrationRequests } from "./integration_requests.js";
+export type { IntegrationRequest, NewIntegrationRequest } from "./integration_requests.js";
 export { agentProgramRevisions } from "./agent_program_revisions.js";
 export { agentApiKeys } from "./agent_api_keys.js";
 export { agentRuntimeState } from "./agent_runtime_state.js";

@@ -781,6 +781,61 @@ async function dispatchToolCall(
     case "paperclipFirebasePush": {
       return httpJson("POST", `/api/agent-tools/firebase-push`, args);
     }
+    // ---- Expanded integration tools ----
+    case "paperclipGoogleAdsListCampaigns": {
+      return httpJson("POST", `/api/agent-tools/google-ads-list-campaigns`, args);
+    }
+    case "paperclipGoogleAdsUpdateCampaignStatus": {
+      return httpJson("POST", `/api/agent-tools/google-ads-update-campaign-status`, args);
+    }
+    case "paperclipGoogleAdsUpdateCampaignBudget": {
+      return httpJson("POST", `/api/agent-tools/google-ads-update-campaign-budget`, args);
+    }
+    case "paperclipGoogleAdsGetSearchTerms": {
+      return httpJson("POST", `/api/agent-tools/google-ads-get-search-terms`, args);
+    }
+    case "paperclipFacebookAdsListCampaigns": {
+      return httpJson("POST", `/api/agent-tools/facebook-ads-list-campaigns`, args);
+    }
+    case "paperclipFacebookAdsUpdateCampaignStatus": {
+      return httpJson("POST", `/api/agent-tools/facebook-ads-update-campaign-status`, args);
+    }
+    case "paperclipFacebookAdsCreateAdSet": {
+      return httpJson("POST", `/api/agent-tools/facebook-ads-create-ad-set`, args);
+    }
+    case "paperclipXGetTweetMetrics": {
+      return httpJson("POST", `/api/agent-tools/x-get-tweet-metrics`, args);
+    }
+    case "paperclipRedditComment": {
+      return httpJson("POST", `/api/agent-tools/reddit-comment`, args);
+    }
+    case "paperclipRedditSearch": {
+      return httpJson("POST", `/api/agent-tools/reddit-search`, args);
+    }
+    case "paperclipTikTokAdsListCampaigns": {
+      return httpJson("POST", `/api/agent-tools/tiktok-ads-list-campaigns`, args);
+    }
+    case "paperclipTikTokAdsUpdateCampaignStatus": {
+      return httpJson("POST", `/api/agent-tools/tiktok-ads-update-campaign-status`, args);
+    }
+    case "paperclipWordpressUpdatePost": {
+      return httpJson("POST", `/api/agent-tools/wordpress-update-post`, args);
+    }
+    case "paperclipWordpressListPosts": {
+      return httpJson("POST", `/api/agent-tools/wordpress-list-posts`, args);
+    }
+    case "paperclipWordpressUploadMedia": {
+      return httpJson("POST", `/api/agent-tools/wordpress-upload-media`, args);
+    }
+    case "paperclipMakeUgcGetStatus": {
+      return httpJson("POST", `/api/agent-tools/make-ugc-get-status`, args);
+    }
+    case "paperclipFirebaseSubscribeTopic": {
+      return httpJson("POST", `/api/agent-tools/firebase-subscribe-topic`, args);
+    }
+    case "paperclipRequestIntegration": {
+      return httpJson("POST", `/api/agent-tools/request-integration`, args);
+    }
     default:
       return { ok: false, result: `Unknown tool: ${name}` };
   }
