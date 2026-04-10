@@ -32,6 +32,10 @@ import { companySkillService } from "./company-skills.js";
 import { buildSkillsManifest } from "./agent-skills-manifest.js";
 import { companySkills as companySkillsTable } from "@paperclipai/db";
 import { webSearch, formatSearchResultsForPrompt } from "./web-search.js";
+import { agentWorkingMemoryService } from "./agent-working-memory.js";
+import { companyStateService } from "./company-state.js";
+import { agentPlaybookService, derivePattern } from "./agent-playbooks.js";
+import { wakeEventsService } from "./wake-events.js";
 import { getDelegationToolDefinitions } from "./agent-tool-definitions.js";
 import { approvals as approvalsTable } from "@paperclipai/db";
 import { budgetService, type BudgetEnforcementScope } from "./budgets.js";
@@ -3422,6 +3426,81 @@ export function heartbeatService(db: Db) {
         );
       }
 
+      // 100x foundation: inject working memory (live cursor), company state
+      // (shared world model), and top playbook hints (learned experience).
+      // Each block is best-effort — a DB error here is logged but not fatal.
+      try {
+        const wmService = agentWorkingMemoryService(db);
+        const wm = await wmService.read(agent.id);
+        if (wm && (wm.currentFocus || wm.openThreads.length > 0)) {
+          context.paperclipWorkingMemory = {
+            currentFocus: wm.currentFocus,
+            openThreads: wm.openThreads,
+            recentDecisions: wm.recentDecisions.slice(-5),
+            expectedResponses: wm.expectedResponses,
+            updatedAt: wm.updatedAt.toISOString(),
+          };
+        }
+      } catch (err) {
+        logger.warn({ err, agentId: agent.id }, "working memory inject failed (non-fatal)");
+      }
+
+      try {
+        const csService = companyStateService(db);
+        const cs = await csService.read(agent.companyId);
+        if (cs) {
+          context.paperclipCompanyState = {
+            version: cs.version,
+            strategy: cs.strategy,
+            okrs: cs.okrs,
+            constraints: cs.constraints,
+            recentPivots: cs.recentPivots.slice(-3),
+            knownTruths: cs.knownTruths.slice(-10),
+            openDecisions: cs.openDecisions,
+            updatedAt: cs.updatedAt.toISOString(),
+          };
+        }
+      } catch (err) {
+        logger.warn({ err, companyId: agent.companyId }, "company_state inject failed (non-fatal)");
+      }
+
+      try {
+        const pbService = agentPlaybookService(db);
+        const issueTitle =
+          typeof context.issueTitle === "string" ? context.issueTitle : null;
+        const pattern = derivePattern({
+          agentRole: agent.role,
+          issueTitle,
+          purpose: programMdText.slice(0, 200),
+        });
+        const hints = await pbService.findRelevant({
+          agentId: agent.id,
+          pattern,
+          limit: 3,
+        });
+        if (hints.length > 0) {
+          context.paperclipPlaybookHints = hints.map((h) => ({
+            pattern: h.pattern,
+            approach: h.approach,
+            insight: h.lastInsight,
+            successRate:
+              h.successCount + h.failureCount + h.partialCount > 0
+                ? Math.round(
+                    (h.successCount /
+                      (h.successCount + h.failureCount + h.partialCount)) *
+                      100,
+                  )
+                : null,
+            avgIterations: h.avgIterations,
+            avgCostCents: h.avgCostCents,
+            lastOutcome: h.lastOutcome,
+          }));
+          context.paperclipPlaybookPattern = pattern;
+        }
+      } catch (err) {
+        logger.warn({ err, agentId: agent.id }, "playbook hint inject failed (non-fatal)");
+      }
+
       const adapter = getServerAdapter(agent.adapterType);
       const authToken = adapter.supportsLocalAgentJwt
         ? createLocalAgentJwt(agent.id, agent.companyId, agent.adapterType, run.id)
@@ -3644,6 +3723,71 @@ export function heartbeatService(db: Db) {
         }
         await finalizeIssueCommentPolicy(finalizedRun, agent);
         await releaseIssueExecutionAndPromote(finalizedRun);
+
+        // 100x foundation: record a retrospective into agent_playbooks so
+        // future heartbeats get context-waterfall hints on similar work.
+        // Best-effort — swallow errors so a playbook DB hiccup never
+        // breaks the run-finalization path.
+        try {
+          const pbService = agentPlaybookService(db);
+          const retroIssueTitle =
+            typeof context.issueTitle === "string" ? context.issueTitle : null;
+          const pattern = derivePattern({
+            agentRole: agent.role,
+            issueTitle: retroIssueTitle,
+            purpose: programMdText.slice(0, 200),
+          });
+          const retroOutcome: "success" | "failure" | "partial" =
+            outcome === "succeeded"
+              ? "success"
+              : outcome === "timed_out"
+                ? "partial"
+                : "failure";
+          const headline =
+            (enrichedResultJson && typeof enrichedResultJson === "object"
+              ? (enrichedResultJson as Record<string, unknown>).headline
+              : null) ?? null;
+          const insightText =
+            typeof headline === "string" && headline.length > 0
+              ? headline.slice(0, 500)
+              : adapterResult.errorMessage
+                ? `error: ${adapterResult.errorMessage.slice(0, 400)}`
+                : null;
+          const approachText =
+            (programMdText || "").split("\n")[0]?.slice(0, 200) || pattern;
+          const iterationsRaw =
+            usageJson && typeof usageJson === "object"
+              ? ((usageJson as Record<string, unknown>).toolCalls ??
+                  (usageJson as Record<string, unknown>).iterations ??
+                  null)
+              : null;
+          const iterations =
+            typeof iterationsRaw === "number" && Number.isFinite(iterationsRaw)
+              ? Math.round(iterationsRaw)
+              : null;
+          const costCents =
+            typeof adapterResult.costUsd === "number" &&
+            Number.isFinite(adapterResult.costUsd)
+              ? Math.round(adapterResult.costUsd * 100)
+              : null;
+          await pbService.recordRetrospective({
+            companyId: agent.companyId,
+            agentId: agent.id,
+            agentRole: agent.role ?? null,
+            runId: finalizedRun.id,
+            pattern,
+            approach: approachText,
+            insight: insightText ?? "",
+            outcome: retroOutcome,
+            iterations: iterations ?? 0,
+            costCents: costCents ?? 0,
+          });
+        } catch (err) {
+          logger.warn(
+            { err, runId: finalizedRun.id, agentId: agent.id },
+            "playbook retrospective failed (non-fatal)",
+          );
+        }
       }
 
       if (finalizedRun) {
@@ -4862,6 +5006,54 @@ export function heartbeatService(db: Db) {
         agentName: target.name,
         active: 0,
       };
+    },
+
+    // Event-driven scheduler consumer. Dequeue pending wake events and
+    // invoke the target agent for each. Marks the event processed only
+    // after enqueue succeeds — failures stay pending for the next sweep.
+    // This is the primary scheduling path; tickTimers remains as a safety
+    // net so nothing stalls if a publisher forgets to emit.
+    tickWakeEvents: async (limit = 25) => {
+      const wakeSvc = wakeEventsService(db);
+      const pending = await wakeSvc.dequeuePending(limit);
+      let processed = 0;
+      let failed = 0;
+      for (const evt of pending) {
+        try {
+          const run = await enqueueWakeup(evt.agentId, {
+            source: "automation",
+            triggerDetail: "callback",
+            reason: `wake_event:${evt.eventType}`,
+            requestedByActorType: "system",
+            requestedByActorId: "wake_event_scheduler",
+            contextSnapshot: {
+              source: "wake_event",
+              eventType: evt.eventType,
+              eventId: evt.id,
+              issueId: evt.issueId,
+              payload: evt.payload,
+            },
+          });
+          await wakeSvc.markProcessed(evt.id, run?.id ?? null);
+          processed += 1;
+        } catch (err) {
+          failed += 1;
+          logger.warn(
+            { err, eventId: evt.id, agentId: evt.agentId },
+            "wake event dispatch failed",
+          );
+          try {
+            await wakeSvc.markProcessed(
+              evt.id,
+              null,
+              err instanceof Error ? err.message : String(err),
+            );
+          } catch {
+            // leave pending for the next sweep
+          }
+        }
+      }
+      return { dequeued: pending.length, processed, failed };
     },
 
     cancelRun: (runId: string) => cancelRunInternal(runId),

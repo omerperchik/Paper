@@ -49,6 +49,12 @@ export interface LeaderboardRow {
   commentsPosted: number;
   memoriesWritten: number;
   humanQuestionsAsked: number;
+  // SLA stats — null when there are no finished runs in the window.
+  // successRatePct: 0–100 rounded; p50DurationMs: median wall-clock of
+  // succeeded runs; avgCostCents: mean billed cost across all finished runs.
+  successRatePct: number | null;
+  p50DurationMs: number | null;
+  avgCostCents: number | null;
 }
 
 function parseWindow(window: string | undefined): Date {
@@ -365,6 +371,9 @@ export function teamFeedService(db: Db) {
           commentsPosted: 0,
           memoriesWritten: 0,
           humanQuestionsAsked: 0,
+          successRatePct: null,
+          p50DurationMs: null,
+          avgCostCents: null,
         });
       }
 
@@ -389,6 +398,67 @@ export function teamFeedService(db: Db) {
         if (!row) continue;
         if (r.status === "succeeded") row.heartbeatRunsOk += Number(r.n);
         else if (r.status === "failed" || r.status === "errored") row.heartbeatRunsFailed += Number(r.n);
+      }
+
+      // SLA stats: median duration (succeeded runs), mean billed cost
+      // (any finished run), success rate. Done in JS because Postgres
+      // percentile_cont over a small dataset isn't worth a second query
+      // shape — we pull raw finished rows and bucket client-side.
+      const finishedRuns = await db
+        .select({
+          agentId: heartbeatRuns.agentId,
+          status: heartbeatRuns.status,
+          startedAt: heartbeatRuns.startedAt,
+          finishedAt: heartbeatRuns.finishedAt,
+          usageJson: heartbeatRuns.usageJson,
+        })
+        .from(heartbeatRuns)
+        .where(
+          and(
+            eq(heartbeatRuns.companyId, companyId),
+            inArray(heartbeatRuns.agentId, agentIds),
+            gte(heartbeatRuns.startedAt, since),
+            inArray(heartbeatRuns.status, ["succeeded", "failed", "errored", "timed_out"]),
+          ),
+        );
+      const slaBucket = new Map<
+        string,
+        { durations: number[]; costCents: number[]; ok: number; total: number }
+      >();
+      for (const r of finishedRuns) {
+        let b = slaBucket.get(r.agentId);
+        if (!b) {
+          b = { durations: [], costCents: [], ok: 0, total: 0 };
+          slaBucket.set(r.agentId, b);
+        }
+        b.total += 1;
+        if (r.status === "succeeded") {
+          b.ok += 1;
+          if (r.startedAt && r.finishedAt) {
+            const ms = r.finishedAt.getTime() - r.startedAt.getTime();
+            if (ms >= 0) b.durations.push(ms);
+          }
+        }
+        const costUsdRaw =
+          r.usageJson && typeof r.usageJson === "object"
+            ? (r.usageJson as Record<string, unknown>).costUsd
+            : null;
+        if (typeof costUsdRaw === "number" && Number.isFinite(costUsdRaw)) {
+          b.costCents.push(Math.round(costUsdRaw * 100));
+        }
+      }
+      for (const [agentId, b] of slaBucket) {
+        const row = rows.get(agentId);
+        if (!row) continue;
+        row.successRatePct = b.total > 0 ? Math.round((b.ok / b.total) * 100) : null;
+        if (b.durations.length > 0) {
+          const sorted = [...b.durations].sort((a, b) => a - b);
+          row.p50DurationMs = sorted[Math.floor(sorted.length / 2)] ?? null;
+        }
+        if (b.costCents.length > 0) {
+          const sum = b.costCents.reduce((a, c) => a + c, 0);
+          row.avgCostCents = Math.round(sum / b.costCents.length);
+        }
       }
 
       // Issue creation (approximation: assignee == agent AND created_at in window)

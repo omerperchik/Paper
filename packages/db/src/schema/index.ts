@@ -15,6 +15,19 @@ export { budgetIncidents } from "./budget_incidents.js";
 export { agentConfigRevisions } from "./agent_config_revisions.js";
 export { agentEvents } from "./agent_events.js";
 export { agentMemories } from "./agent_memories.js";
+export { agentWorkingMemory } from "./agent_working_memory.js";
+export type { OpenThread, RecentDecision, ExpectedResponse } from "./agent_working_memory.js";
+export { companyState } from "./company_state.js";
+export type {
+  StrategyBlock,
+  OkrEntry,
+  ConstraintsBlock,
+  PivotEntry,
+  TruthEntry,
+  OpenDecisionEntry,
+} from "./company_state.js";
+export { agentPlaybooks } from "./agent_playbooks.js";
+export { wakeEvents } from "./wake_events.js";
 export { agentProgramRevisions } from "./agent_program_revisions.js";
 export { agentApiKeys } from "./agent_api_keys.js";
 export { agentRuntimeState } from "./agent_runtime_state.js";

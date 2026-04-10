@@ -423,7 +423,17 @@ async function traceLog(
 //   paperclipUpdateIssue     → PATCH /api/issues/{issueId}
 // ---------------------------------------------------------------------------
 
-const MAX_TOOL_ITERATIONS = 6;
+// Tool loop caps — deliberately permissive. The old cap of 6 iterations was
+// a major bottleneck: real agentic research easily needs 20–50 tool calls
+// (search → fetch → memory → delegate → comment → update). We now gate on
+// three compound limits:
+//   1. MAX_TOOL_ITERATIONS — ejection seat, not a working cap.
+//   2. MAX_TOOL_CALLS_TOTAL — prevents runaway loops that batch many calls per iter.
+//   3. MAX_WALL_CLOCK_MS — wall-clock cap so a stuck model doesn't burn budget.
+// The model can also exit cleanly any time via paperclipDone().
+const MAX_TOOL_ITERATIONS = 50;
+const MAX_TOOL_CALLS_TOTAL = 120;
+const MAX_WALL_CLOCK_MS = 9 * 60 * 1000;
 
 interface ToolDispatchOptions {
   apiBase: string;
@@ -509,7 +519,48 @@ async function dispatchToolCall(
       const body: Record<string, unknown> = {
         title: typeof args.title === "string" ? args.title : "(untitled)",
       };
-      if (typeof args.description === "string") body.description = args.description;
+      // If a typed Handoff packet was provided, merge it into the
+      // description as a structured section the assignee's context
+      // waterfall will surface prominently. Also persist the raw packet
+      // via metadata so downstream consumers (SLA tracking, retros) can
+      // reference it. This is the "typed delegation" pattern — dramatically
+      // reduces the ping-pong comments that normally follow a delegation.
+      const handoff =
+        args.handoff && typeof args.handoff === "object" && !Array.isArray(args.handoff)
+          ? (args.handoff as Record<string, unknown>)
+          : null;
+      let description = typeof args.description === "string" ? args.description : "";
+      if (handoff) {
+        const lines: string[] = [];
+        lines.push("## Handoff");
+        if (typeof handoff.goal === "string" && handoff.goal.trim()) {
+          lines.push(`**Goal:** ${handoff.goal.trim()}`);
+        }
+        if (Array.isArray(handoff.constraints) && handoff.constraints.length > 0) {
+          lines.push("**Constraints:**");
+          for (const c of handoff.constraints) {
+            if (typeof c === "string" && c.trim()) lines.push(`- ${c.trim()}`);
+          }
+        }
+        if (Array.isArray(handoff.successCriteria) && handoff.successCriteria.length > 0) {
+          lines.push("**Success criteria:**");
+          for (const c of handoff.successCriteria) {
+            if (typeof c === "string" && c.trim()) lines.push(`- [ ] ${c.trim()}`);
+          }
+        }
+        if (handoff.budget && typeof handoff.budget === "object") {
+          const b = handoff.budget as Record<string, unknown>;
+          const parts: string[] = [];
+          if (typeof b.maxCents === "number") parts.push(`≤ $${(b.maxCents / 100).toFixed(2)}`);
+          if (typeof b.maxIterations === "number") parts.push(`≤ ${b.maxIterations} heartbeats`);
+          if (typeof b.deadline === "string" && b.deadline.trim()) parts.push(`by ${b.deadline.trim()}`);
+          if (parts.length > 0) lines.push(`**Budget:** ${parts.join(", ")}`);
+        }
+        const section = lines.join("\n");
+        description = description ? `${section}\n\n${description}` : section;
+        body.handoff = handoff;
+      }
+      if (description) body.description = description;
       if (typeof args.assigneeAgentId === "string") body.assigneeAgentId = args.assigneeAgentId;
       if (typeof args.priority === "string") body.priority = args.priority;
       body.status = typeof args.status === "string" ? args.status : "todo";
@@ -627,6 +678,46 @@ async function dispatchToolCall(
       if (typeof args.baseBranch === "string") body.baseBranch = args.baseBranch;
       return httpJson("POST", `/api/agent-tools/repo-write-file`, body);
     }
+    case "paperclipReadWorkingMemory": {
+      return httpJson("POST", `/api/agent-tools/working-memory-read`);
+    }
+    case "paperclipUpdateWorkingMemory": {
+      const body: Record<string, unknown> = {};
+      if (typeof args.currentFocus === "string") body.currentFocus = args.currentFocus;
+      if (Array.isArray(args.openThreads)) body.openThreads = args.openThreads;
+      if (Array.isArray(args.recentDecisions)) body.recentDecisions = args.recentDecisions;
+      if (Array.isArray(args.expectedResponses)) body.expectedResponses = args.expectedResponses;
+      return httpJson("POST", `/api/agent-tools/working-memory-write`, body);
+    }
+    case "paperclipReadCompanyState": {
+      return httpJson("POST", `/api/agent-tools/company-state-read`);
+    }
+    case "paperclipUpdateCompanyState": {
+      const body: Record<string, unknown> = {};
+      for (const key of ["strategy", "okrs", "constraints", "recentPivots", "knownTruths", "openDecisions"]) {
+        if (args[key] !== undefined) body[key] = args[key];
+      }
+      return httpJson("POST", `/api/agent-tools/company-state-write`, body);
+    }
+    case "paperclipEstimateCost": {
+      const operation = typeof args.operation === "string" ? args.operation : "";
+      if (!operation) return { ok: false, result: "operation is required" };
+      const body: Record<string, unknown> = { operation };
+      if (typeof args.estimatedToolCalls === "number") body.estimatedToolCalls = args.estimatedToolCalls;
+      if (typeof args.estimatedInputTokens === "number") body.estimatedInputTokens = args.estimatedInputTokens;
+      if (typeof args.estimatedOutputTokens === "number") body.estimatedOutputTokens = args.estimatedOutputTokens;
+      if (typeof args.notes === "string") body.notes = args.notes;
+      return httpJson("POST", `/api/agent-tools/estimate-cost`, body);
+    }
+    case "paperclipDone": {
+      // paperclipDone is handled as an early-exit signal in runToolLoop —
+      // but we still call the HTTP route for telemetry + consistent envelope.
+      const body: Record<string, unknown> = {};
+      if (typeof args.outcome === "string") body.outcome = args.outcome;
+      if (typeof args.confidence === "string") body.confidence = args.confidence;
+      if (Array.isArray(args.openQuestions)) body.openQuestions = args.openQuestions;
+      return httpJson("POST", `/api/agent-tools/done`, body);
+    }
     case "paperclipRepoOpenPr": {
       const repo = typeof args.repo === "string" ? args.repo : "";
       const title = typeof args.title === "string" ? args.title : "";
@@ -657,26 +748,71 @@ async function runToolLoop(opts: {
   dispatch: ToolDispatchOptions | null;
   label: string;
   onLog: AdapterExecutionContext["onLog"];
-}): Promise<{ finalCall: CallResult | null; totalToolCalls: number }> {
+}): Promise<{ finalCall: CallResult | null; totalToolCalls: number; exitReason: string }> {
   let lastCall: CallResult | null = null;
   let totalToolCalls = 0;
+  const loopStartedAt = Date.now();
+  let exitReason = "completed";
   for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
+    // Wall-clock and total-calls budget checks before invoking the model again.
+    if (Date.now() - loopStartedAt > MAX_WALL_CLOCK_MS) {
+      exitReason = `wall_clock_cap (${Math.round(MAX_WALL_CLOCK_MS / 1000)}s)`;
+      break;
+    }
+    if (totalToolCalls >= MAX_TOOL_CALLS_TOTAL) {
+      exitReason = `total_tool_calls_cap (${MAX_TOOL_CALLS_TOTAL})`;
+      break;
+    }
+
     lastCall = await opts.callFn(opts.messages);
     await traceLog(opts.onLog, lastCall);
 
     if (!lastCall.ok || !lastCall.parsed) {
-      return { finalCall: lastCall, totalToolCalls };
+      return { finalCall: lastCall, totalToolCalls, exitReason: "call_failed" };
     }
 
     const toolCalls = lastCall.parsed.toolCalls ?? [];
     if (toolCalls.length === 0) {
-      return { finalCall: lastCall, totalToolCalls };
+      return { finalCall: lastCall, totalToolCalls, exitReason: "no_more_tool_calls" };
+    }
+
+    // Early-exit signal: paperclipDone() lets the model explicitly declare it's
+    // finished. We honor it immediately without another model turn.
+    const doneCall = toolCalls.find((tc) => tc.function.name === "paperclipDone");
+    if (doneCall) {
+      const args = safeParseArgs(doneCall.function.arguments);
+      const outcome = typeof args.outcome === "string" ? args.outcome : "completed";
+      await opts.onLog(
+        "stderr",
+        `[gemma-local] Tool loop (${opts.label}) paperclipDone() called: ${outcome}\n`,
+      );
+      // Inject the done call into the transcript so resultJson reflects it.
+      opts.messages.push({
+        role: "assistant",
+        content: lastCall.parsed.content || "",
+        tool_calls: [{
+          id: doneCall.id,
+          type: "function" as const,
+          function: { name: doneCall.function.name, arguments: doneCall.function.arguments },
+        }],
+      });
+      opts.messages.push({
+        role: "tool",
+        tool_call_id: doneCall.id,
+        name: doneCall.function.name,
+        content: JSON.stringify({ ok: true, done: true, outcome }),
+      });
+      // Patch the lastCall content to include the outcome as the final answer.
+      if (lastCall.parsed) {
+        lastCall.parsed.content = lastCall.parsed.content || outcome;
+      }
+      return { finalCall: lastCall, totalToolCalls: totalToolCalls + 1, exitReason: "paperclipDone" };
     }
 
     totalToolCalls += toolCalls.length;
     await opts.onLog(
       "stderr",
-      `[gemma-local] Tool loop (${opts.label}) iter=${iter + 1}/${MAX_TOOL_ITERATIONS}: dispatching ${toolCalls.length} tool call(s)\n`,
+      `[gemma-local] Tool loop (${opts.label}) iter=${iter + 1}/${MAX_TOOL_ITERATIONS}: dispatching ${toolCalls.length} tool call(s) in parallel\n`,
     );
 
     opts.messages.push({
@@ -689,19 +825,28 @@ async function runToolLoop(opts: {
       })),
     });
 
-    for (const tc of toolCalls) {
-      const args = safeParseArgs(tc.function.arguments);
-      let resultText: string;
-      if (!opts.dispatch) {
-        resultText = `Error: tool dispatch unavailable in this run (no apiBase or authToken). Cannot execute ${tc.function.name}.`;
-      } else {
-        const dispatched = await dispatchToolCall(tc.function.name, args, opts.dispatch);
-        resultText = dispatched.result;
-        await opts.onLog(
-          "stderr",
-          `[gemma-local]   tool=${tc.function.name} ok=${dispatched.ok} bytes=${resultText.length}\n`,
-        );
-      }
+    // Parallel dispatch — multiple tool calls from one model turn run
+    // concurrently. This is a multi-x speedup for research-heavy loops where
+    // an agent fires 4+ web searches simultaneously.
+    const dispatched = await Promise.all(
+      toolCalls.map(async (tc) => {
+        const args = safeParseArgs(tc.function.arguments);
+        if (!opts.dispatch) {
+          return {
+            tc,
+            resultText: `Error: tool dispatch unavailable in this run (no apiBase or authToken). Cannot execute ${tc.function.name}.`,
+            ok: false,
+          };
+        }
+        const res = await dispatchToolCall(tc.function.name, args, opts.dispatch);
+        return { tc, resultText: res.result, ok: res.ok };
+      }),
+    );
+    for (const { tc, resultText, ok } of dispatched) {
+      await opts.onLog(
+        "stderr",
+        `[gemma-local]   tool=${tc.function.name} ok=${ok} bytes=${resultText.length}\n`,
+      );
       opts.messages.push({
         role: "tool",
         tool_call_id: tc.id,
@@ -711,11 +856,12 @@ async function runToolLoop(opts: {
     }
   }
 
+  if (exitReason === "completed") exitReason = `max_iterations (${MAX_TOOL_ITERATIONS})`;
   await opts.onLog(
     "stderr",
-    `[gemma-local] Tool loop (${opts.label}) hit cap (${MAX_TOOL_ITERATIONS} iterations, ${totalToolCalls} total tool calls).\n`,
+    `[gemma-local] Tool loop (${opts.label}) exited: ${exitReason}, totalToolCalls=${totalToolCalls}\n`,
   );
-  return { finalCall: lastCall, totalToolCalls };
+  return { finalCall: lastCall, totalToolCalls, exitReason };
 }
 
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {

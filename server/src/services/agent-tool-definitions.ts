@@ -100,6 +100,36 @@ export const DELEGATION_TOOL_DEFINITIONS: DelegationToolDefinition[] = [
             type: "string",
             description: "UUID of the project this issue belongs to. Omit to inherit from your own project.",
           },
+          handoff: {
+            type: "object",
+            description:
+              "Optional typed handoff packet. When delegating real work (not just a scratch todo), fill this in so the assignee starts with crystal-clear scope instead of rediscovering your intent. Dramatically reduces ping-pong comments. Populate all four fields when possible.",
+            properties: {
+              goal: {
+                type: "string",
+                description: "The outcome in one sentence. What 'done' looks like from the user's perspective.",
+              },
+              constraints: {
+                type: "array",
+                items: { type: "string" },
+                description: "Hard constraints the assignee must respect (budget, timeline, tech choices, brand rules, things NOT to do).",
+              },
+              successCriteria: {
+                type: "array",
+                items: { type: "string" },
+                description: "Checklist the assignee can self-verify against before calling paperclipDone. Be concrete and testable.",
+              },
+              budget: {
+                type: "object",
+                description: "Soft budget hints. Assignee uses these to choose scope and decide whether to escalate.",
+                properties: {
+                  maxCents: { type: "number", description: "Max billed LLM+tool spend before escalating back." },
+                  maxIterations: { type: "number", description: "Max heartbeats the assignee should spend on this before checking in." },
+                  deadline: { type: "string", description: "ISO timestamp or natural language ('EOD friday')." },
+                },
+              },
+            },
+          },
         },
         required: ["title"],
       },
@@ -347,6 +377,227 @@ export const DELEGATION_TOOL_DEFINITIONS: DelegationToolDefinition[] = [
           },
         },
         required: [],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipDone",
+      description:
+        "Signal that you are finished with this heartbeat. The tool loop will exit cleanly after this call — use it as soon as you have accomplished what you set out to do. Do NOT keep iterating past the point of diminishing returns. Every extra tool call costs money.",
+      parameters: {
+        type: "object",
+        properties: {
+          outcome: {
+            type: "string",
+            description: "One-paragraph summary of what you accomplished this heartbeat. This is what the human sees in the feed.",
+          },
+          confidence: {
+            type: "string",
+            enum: ["low", "medium", "high"],
+            description: "How confident are you the outcome is correct? Low means 'someone should double-check this.'",
+          },
+          openQuestions: {
+            type: "array",
+            items: { type: "string" },
+            description: "Anything you could not resolve this run and want to flag for your next heartbeat or another agent.",
+          },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipReadWorkingMemory",
+      description:
+        "Read your persistent working memory — the structured scratchpad of your currentFocus, openThreads, recentDecisions, and expectedResponses. This is how you resume where you left off instead of rebuilding context from scratch. Call this EARLY in every heartbeat if the automatically-injected paperclipWorkingMemory context is missing or stale.",
+      parameters: { type: "object", properties: {}, required: [] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipUpdateWorkingMemory",
+      description:
+        "Update your persistent working memory at the end of a heartbeat so your future self can resume. Pass only the fields you want to change; others are preserved. currentFocus should be one line; openThreads should list concurrent tasks with a nextStep and (optionally) blockedBy; recentDecisions should record commitments you made; expectedResponses are questions you asked and are waiting on. Keep it terse — this is a cursor, not a journal.",
+      parameters: {
+        type: "object",
+        properties: {
+          currentFocus: {
+            type: "string",
+            description: "One-line description of what you are actively working on right now.",
+          },
+          openThreads: {
+            type: "array",
+            description: "Concurrent tasks you have in flight. Max 10.",
+            items: {
+              type: "object",
+              properties: {
+                topic: { type: "string" },
+                nextStep: { type: "string" },
+                blockedBy: { type: "string" },
+                lastTouchedAt: { type: "string" },
+              },
+              required: ["topic", "nextStep"],
+            },
+          },
+          recentDecisions: {
+            type: "array",
+            description: "Last 10 decisions you committed to.",
+            items: {
+              type: "object",
+              properties: {
+                decision: { type: "string" },
+                rationale: { type: "string" },
+                at: { type: "string" },
+              },
+              required: ["decision"],
+            },
+          },
+          expectedResponses: {
+            type: "array",
+            description: "Questions you asked and are waiting on a response for.",
+            items: {
+              type: "object",
+              properties: {
+                question: { type: "string" },
+                waitingOn: { type: "string" },
+                askedAt: { type: "string" },
+              },
+              required: ["question", "waitingOn"],
+            },
+          },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipReadCompanyState",
+      description:
+        "Read the shared company world model: current strategy, OKRs, constraints, recent pivots, known truths, and open strategic decisions. Every agent should check this at the top of any non-trivial heartbeat to ensure their work aligns with current strategy (which may have pivoted since last run). Automatically injected into context as `paperclipCompanyState`; this tool is the explicit-read path.",
+      parameters: { type: "object", properties: {}, required: [] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipUpdateCompanyState",
+      description:
+        "Update the shared company world model. CEO/founder-role ONLY — will return a 403 for other roles. Use this when strategy changes, when you resolve an open decision, when a pivot happens, or when a new hard truth becomes known. All agents will see the update on their next heartbeat automatically — do NOT also post announcement comments; the state is the announcement.",
+      parameters: {
+        type: "object",
+        properties: {
+          strategy: {
+            type: "object",
+            description: "Current strategic posture.",
+            properties: {
+              currentFocus: { type: "string", description: "One-line current strategic priority." },
+              northStar: { type: "string", description: "North-star metric or mission statement." },
+              activeBets: { type: "array", items: { type: "string" } },
+              killedBets: { type: "array", items: { type: "string" }, description: "Bets we explicitly decided NOT to make — helps subordinates avoid re-proposing them." },
+            },
+          },
+          okrs: {
+            type: "array",
+            description: "Active OKRs.",
+            items: {
+              type: "object",
+              properties: {
+                objective: { type: "string" },
+                keyResults: { type: "array", items: { type: "string" } },
+                quarter: { type: "string" },
+              },
+              required: ["objective", "keyResults"],
+            },
+          },
+          constraints: {
+            type: "object",
+            description: "Hard constraints everyone works within.",
+            properties: {
+              runwayMonths: { type: "number" },
+              monthlyBudgetCents: { type: "number" },
+              hardDeadlines: { type: "array", items: { type: "string" } },
+            },
+          },
+          recentPivots: {
+            type: "array",
+            description: "Last N strategic changes with why. Agents check this to avoid acting on stale context.",
+            items: {
+              type: "object",
+              properties: {
+                when: { type: "string" },
+                from: { type: "string" },
+                to: { type: "string" },
+                why: { type: "string" },
+              },
+              required: ["when", "from", "to", "why"],
+            },
+          },
+          knownTruths: {
+            type: "array",
+            description: "Facts everyone should know (e.g. 'we picked Vercel over Railway on 3/21 because X').",
+            items: {
+              type: "object",
+              properties: {
+                fact: { type: "string" },
+                source: { type: "string" },
+                at: { type: "string" },
+              },
+              required: ["fact"],
+            },
+          },
+          openDecisions: {
+            type: "array",
+            description: "Strategic questions awaiting a decision.",
+            items: {
+              type: "object",
+              properties: {
+                question: { type: "string" },
+                options: { type: "array", items: { type: "string" } },
+                blockedWork: { type: "string" },
+              },
+              required: ["question"],
+            },
+          },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipEstimateCost",
+      description:
+        "Before kicking off a large operation, estimate how much it will cost in tool calls + tokens. Returns an estimate and a nextHint telling you whether to proceed or ask a human first. Use this for anything you suspect might burn >$0.25 — research sprees, multi-file repo edits, long tool loops. Thinking about cost before spending it is the cheapest form of alignment.",
+      parameters: {
+        type: "object",
+        properties: {
+          operation: {
+            type: "string",
+            description: "Short description of what you are about to do.",
+          },
+          estimatedToolCalls: {
+            type: "number",
+            description: "How many tool calls you expect (1–500).",
+          },
+          estimatedInputTokens: {
+            type: "number",
+            description: "Rough input-token guess (optional — tool will estimate from toolCalls if omitted).",
+          },
+          estimatedOutputTokens: {
+            type: "number",
+            description: "Rough output-token guess (optional).",
+          },
+          notes: { type: "string" },
+        },
+        required: ["operation"],
       },
     },
   },

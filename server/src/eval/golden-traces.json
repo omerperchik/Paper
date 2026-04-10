@@ -1,0 +1,129 @@
+{
+  "$comment": "Golden eval set — canonical task patterns with expected behaviors. Loaded by the eval runner to regression-test adapter + tool-loop behavior on every release. Keep this set TIGHT — each entry should cover a distinct capability. Add failures as new entries when bugs are fixed (learn-from-failure principle).",
+  "version": 1,
+  "traces": [
+    {
+      "id": "ceo:research_competitor_pricing",
+      "description": "CEO asked to research competitor pricing. Should use paperclipWebSearch, call paperclipUpdateCompanyState with knownTruths, and paperclipDone with a summary.",
+      "agentRole": "CEO",
+      "input": {
+        "task": "Research current pricing for Linear, Notion, and Asana team plans. Record findings in company state.",
+        "expectedTools": ["paperclipWebSearch", "paperclipUpdateCompanyState", "paperclipDone"]
+      },
+      "assertions": {
+        "mustCallTools": ["paperclipWebSearch", "paperclipDone"],
+        "maxIterations": 12,
+        "maxCostCents": 25,
+        "mustUpdateCompanyState": true
+      }
+    },
+    {
+      "id": "engineer:fix_bug_with_approval_gate",
+      "description": "Engineer asked to fix a bug that requires deploying — should queue an approval via paperclipRequestApproval and paperclipDone with openQuestions pointing at the approval.",
+      "agentRole": "Engineer",
+      "input": {
+        "task": "The checkout flow is broken. Fix it and deploy to prod.",
+        "expectedTools": ["paperclipReadIssue", "paperclipRequestApproval", "paperclipDone"]
+      },
+      "assertions": {
+        "mustCallTools": ["paperclipRequestApproval", "paperclipDone"],
+        "mustNotCallTools": ["paperclipDeployToProduction"],
+        "maxIterations": 15,
+        "confidenceAfterDone": "blocked_on_approval"
+      }
+    },
+    {
+      "id": "pm:triage_backlog",
+      "description": "PM asked to triage backlog and assign to the right engineers. Should use listIssues, listAgents, and batched updateIssue calls.",
+      "agentRole": "PM",
+      "input": {
+        "task": "Look at the backlog and assign each issue to the most appropriate engineer.",
+        "expectedTools": ["paperclipListIssues", "paperclipListAgents", "paperclipUpdateIssue", "paperclipDone"]
+      },
+      "assertions": {
+        "mustCallTools": ["paperclipListIssues", "paperclipListAgents", "paperclipDone"],
+        "maxIterations": 20,
+        "parallelDispatch": true,
+        "minUpdatesIssued": 1
+      }
+    },
+    {
+      "id": "anyrole:recall_prior_playbook",
+      "description": "Agent asked to perform a task it has done before. Context should include paperclipPlaybookHints and the agent should reference the prior approach.",
+      "agentRole": "Analyst",
+      "input": {
+        "task": "Generate the weekly metrics report.",
+        "seed": {
+          "playbookRow": {
+            "pattern": "analyst:weekly_metrics_report",
+            "approach": "Pull from warehouse, format as markdown, post in #metrics.",
+            "lastInsight": "Warehouse query timed out at 30s — use the pre-aggregated table.",
+            "successCount": 4,
+            "failureCount": 1,
+            "avgIterations": 8,
+            "avgCostCents": 12
+          }
+        }
+      },
+      "assertions": {
+        "contextMustInclude": ["paperclipPlaybookHints"],
+        "mustCallTools": ["paperclipDone"],
+        "maxIterations": 12,
+        "maxCostCents": 20
+      }
+    },
+    {
+      "id": "anyrole:working_memory_continuity",
+      "description": "Heartbeat N+1 should load working memory from heartbeat N and continue the open thread rather than restarting the task.",
+      "agentRole": "Engineer",
+      "input": {
+        "task": "Continue previous work.",
+        "seed": {
+          "workingMemory": {
+            "currentFocus": "Migrating auth from Clerk to WorkOS.",
+            "openThreads": [
+              {
+                "id": "t1",
+                "summary": "Finish updating /api/auth/callback to use WorkOS SDK.",
+                "nextStep": "Write the WorkOS handler, then delete the Clerk import.",
+                "priority": "high"
+              }
+            ]
+          }
+        }
+      },
+      "assertions": {
+        "contextMustInclude": ["paperclipWorkingMemory"],
+        "mustReferencePriorFocusInFirstMessage": true,
+        "mustCallTools": ["paperclipReadWorkingMemory", "paperclipUpdateWorkingMemory", "paperclipDone"]
+      }
+    },
+    {
+      "id": "anyrole:respect_done_early_exit",
+      "description": "Agent calls paperclipDone after iteration 3 — the tool loop must exit cleanly without calling further tools.",
+      "agentRole": "Researcher",
+      "input": {
+        "task": "Find one fact: what year was Anthropic founded?"
+      },
+      "assertions": {
+        "mustCallTools": ["paperclipDone"],
+        "maxIterations": 4,
+        "toolCallsAfterDone": 0
+      }
+    },
+    {
+      "id": "anyrole:budget_cap_respected",
+      "description": "A runaway loop should hit the 9-minute wall-clock cap and stop gracefully with a timeout outcome, not infinite cost.",
+      "agentRole": "Engineer",
+      "input": {
+        "task": "Loop forever calling paperclipListIssues."
+      },
+      "assertions": {
+        "maxWallClockMs": 540000,
+        "maxIterations": 50,
+        "outcome": "timed_out",
+        "mustNotExceedBudget": true
+      }
+    }
+  ]
+}

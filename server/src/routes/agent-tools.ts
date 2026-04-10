@@ -14,10 +14,15 @@
 
 import { Router } from "express";
 import { z } from "zod";
+import { eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
+import { agents as agentsTable } from "@paperclipai/db";
 import { toolResponse } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
 import { agentMemoryService } from "../services/agent-memory.js";
+import { agentWorkingMemoryService } from "../services/agent-working-memory.js";
+import { companyStateService } from "../services/company-state.js";
+import { agentPlaybookService, derivePattern } from "../services/agent-playbooks.js";
 import { teamFeedService } from "../services/team-feed.js";
 import { webSearch, formatSearchResultsForPrompt } from "../services/web-search.js";
 import { unauthorized, unprocessable } from "../errors.js";
@@ -49,6 +54,104 @@ const memorySearchSchema = z.object({
 const agentStatsSchema = z.object({
   scope: z.enum(["team", "company"]).optional().default("team"),
   window: z.string().regex(/^\d+[hdw]$/).optional().default("7d"),
+});
+
+// ---------- 100x foundation schemas ----------
+
+const openThreadSchema = z.object({
+  topic: z.string().min(1).max(200),
+  nextStep: z.string().min(1).max(400),
+  blockedBy: z.string().max(200).optional(),
+  lastTouchedAt: z.string().max(64).optional(),
+});
+const recentDecisionSchema = z.object({
+  decision: z.string().min(1).max(400),
+  rationale: z.string().max(800).optional(),
+  at: z.string().max(64).optional(),
+});
+const expectedResponseSchema = z.object({
+  question: z.string().min(1).max(400),
+  waitingOn: z.string().min(1).max(200),
+  askedAt: z.string().max(64).optional(),
+});
+const workingMemoryWriteSchema = z.object({
+  currentFocus: z.string().max(400).optional(),
+  openThreads: z.array(openThreadSchema).max(10).optional(),
+  recentDecisions: z.array(recentDecisionSchema).max(10).optional(),
+  expectedResponses: z.array(expectedResponseSchema).max(10).optional(),
+});
+
+const companyStateWriteSchema = z.object({
+  strategy: z
+    .object({
+      currentFocus: z.string().max(400).optional(),
+      northStar: z.string().max(400).optional(),
+      activeBets: z.array(z.string().max(200)).max(10).optional(),
+      killedBets: z.array(z.string().max(200)).max(10).optional(),
+    })
+    .optional(),
+  okrs: z
+    .array(
+      z.object({
+        objective: z.string().max(300),
+        keyResults: z.array(z.string().max(200)).max(6),
+        quarter: z.string().max(32).optional(),
+      }),
+    )
+    .max(10)
+    .optional(),
+  constraints: z
+    .object({
+      runwayMonths: z.number().optional(),
+      monthlyBudgetCents: z.number().optional(),
+      hardDeadlines: z.array(z.string().max(200)).max(10).optional(),
+    })
+    .optional(),
+  recentPivots: z
+    .array(
+      z.object({
+        when: z.string().max(64),
+        from: z.string().max(300),
+        to: z.string().max(300),
+        why: z.string().max(500),
+      }),
+    )
+    .max(10)
+    .optional(),
+  knownTruths: z
+    .array(
+      z.object({
+        fact: z.string().max(400),
+        source: z.string().max(200).optional(),
+        at: z.string().max(64).optional(),
+      }),
+    )
+    .max(30)
+    .optional(),
+  openDecisions: z
+    .array(
+      z.object({
+        question: z.string().max(400),
+        options: z.array(z.string().max(200)).max(6).optional(),
+        blockedWork: z.string().max(300).optional(),
+      }),
+    )
+    .max(15)
+    .optional(),
+});
+
+const estimateCostSchema = z.object({
+  operation: z.string().min(1).max(200),
+  estimatedToolCalls: z.number().int().min(1).max(500).optional(),
+  estimatedInputTokens: z.number().int().min(0).max(1_000_000).optional(),
+  estimatedOutputTokens: z.number().int().min(0).max(500_000).optional(),
+  notes: z.string().max(1000).optional(),
+});
+
+const doneSchema = z.object({
+  outcome: z.string().max(2000).optional(),
+  confidence: z.enum(["low", "medium", "high"]).optional(),
+  openQuestions: z.array(z.string().max(300)).max(10).optional(),
 });
 
 const repoRef = z.object({
@@ -175,7 +278,20 @@ async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Respons
 export function agentToolRoutes(db: Db) {
   const router = Router();
   const memory = agentMemoryService(db);
+  const workingMemory = agentWorkingMemoryService(db);
+  const worldState = companyStateService(db);
+  const playbooks = agentPlaybookService(db);
   const feed = teamFeedService(db);
+
+  async function resolveAgentRole(agentId: string): Promise<string | null> {
+    const row = await db
+      .select({ role: agentsTable.role })
+      .from(agentsTable)
+      .where(eq(agentsTable.id, agentId))
+      .limit(1)
+      .then((r) => r[0] ?? null);
+    return row?.role ?? null;
+  }
 
   router.post("/agent-tools/web-search", validate(webSearchSchema), async (req, res) => {
     requireAgentActor(req);
@@ -294,6 +410,187 @@ export function agentToolRoutes(db: Db) {
         }),
       );
     }
+  });
+
+  // ---------- working memory (live cursor) ----------
+
+  router.post("/agent-tools/working-memory-read", async (req, res) => {
+    const { agentId } = requireAgentActor(req);
+    const row = await workingMemory.read(agentId);
+    if (!row) {
+      res.json(
+        toolResponse.empty(
+          "No working memory yet. This is your first structured scratchpad — write one at the end of this heartbeat with paperclipUpdateWorkingMemory so your next run can resume where you left off.",
+          "Set currentFocus to a one-line description of what you are working on right now.",
+        ),
+      );
+      return;
+    }
+    res.json(
+      toolResponse.ok({
+        data: {
+          currentFocus: row.currentFocus,
+          openThreads: row.openThreads,
+          recentDecisions: row.recentDecisions,
+          expectedResponses: row.expectedResponses,
+          updatedAt: row.updatedAt.toISOString(),
+        },
+        nextHint:
+          row.expectedResponses.length > 0
+            ? "You have pending questions awaiting answers — check paperclipAnsweredHumanQuestions in your context before asking again."
+            : "Resume work on the top openThread, or refine currentFocus if priorities shifted.",
+      }),
+    );
+  });
+
+  router.post(
+    "/agent-tools/working-memory-write",
+    validate(workingMemoryWriteSchema),
+    async (req, res) => {
+      const { agentId, companyId } = requireAgentActor(req);
+      const patch = req.body as z.infer<typeof workingMemoryWriteSchema>;
+      const row = await workingMemory.upsert({ companyId, agentId, patch });
+      res.json(
+        toolResponse.ok({
+          data: {
+            currentFocus: row.currentFocus,
+            openThreadCount: row.openThreads.length,
+            updatedAt: row.updatedAt.toISOString(),
+          },
+          message: `Working memory updated. Focus: ${row.currentFocus || "(none)"}; ${row.openThreads.length} open thread(s).`,
+          nextHint:
+            "Your next heartbeat will resume from this scratchpad. Keep it terse — this is your cursor, not a journal.",
+        }),
+      );
+    },
+  );
+
+  // ---------- company state (shared world model) ----------
+
+  router.post("/agent-tools/company-state-read", async (req, res) => {
+    const { companyId } = requireAgentActor(req);
+    const row = await worldState.read(companyId);
+    if (!row) {
+      res.json(
+        toolResponse.empty(
+          "No company_state has been written yet. If you are the CEO, seed it with paperclipUpdateCompanyState; otherwise ask your CEO to.",
+          "Subordinates: proceed with what you know and flag missing strategy as an openThread.",
+        ),
+      );
+      return;
+    }
+    res.json(
+      toolResponse.ok({
+        data: {
+          version: row.version,
+          strategy: row.strategy,
+          okrs: row.okrs,
+          constraints: row.constraints,
+          recentPivots: row.recentPivots.slice(-3),
+          knownTruths: row.knownTruths.slice(-10),
+          openDecisions: row.openDecisions,
+          updatedAt: row.updatedAt.toISOString(),
+        },
+        nextHint:
+          row.openDecisions.length > 0
+            ? "There are open strategic decisions. If you can contribute data or a recommendation, create an issue or comment to help the CEO decide."
+            : "Align your work to strategy.currentFocus and check that your openThreads do not contradict killedBets.",
+      }),
+    );
+  });
+
+  router.post(
+    "/agent-tools/company-state-write",
+    validate(companyStateWriteSchema),
+    async (req, res) => {
+      const { agentId, companyId } = requireAgentActor(req);
+      const role = (await resolveAgentRole(agentId))?.toLowerCase() ?? "";
+      if (role !== "ceo" && role !== "founder") {
+        res.status(403).json(
+          toolResponse.fail({
+            code: "company_state_forbidden",
+            message:
+              "Only CEO/founder-role agents can update company_state. Propose changes via a comment on the CEO's issue queue instead.",
+          }),
+        );
+        return;
+      }
+      const patch = req.body as z.infer<typeof companyStateWriteSchema>;
+      const row = await worldState.upsert({
+        companyId,
+        updatedByAgentId: agentId,
+        patch,
+      });
+      res.json(
+        toolResponse.ok({
+          data: {
+            version: row.version,
+            strategy: row.strategy,
+            updatedAt: row.updatedAt.toISOString(),
+          },
+          message: `company_state v${row.version} updated. All agents will see this on their next heartbeat.`,
+          nextHint:
+            "Every subordinate reads company_state at the top of their next heartbeat — there is no need to re-announce in comments. Focus on execution.",
+        }),
+      );
+    },
+  );
+
+  // ---------- paperclipEstimateCost (predictive budgeting) ----------
+
+  router.post(
+    "/agent-tools/estimate-cost",
+    validate(estimateCostSchema),
+    async (req, res) => {
+      const body = req.body as z.infer<typeof estimateCostSchema>;
+      // Rough cost model for gemma-local: assume $0.0000002/input tok,
+      // $0.0000006/output tok. This is a back-of-envelope number — the
+      // value here is forcing the model to think before acting, not
+      // precision.
+      const toolCalls = body.estimatedToolCalls ?? 3;
+      const inputTokens =
+        body.estimatedInputTokens ?? 2000 + toolCalls * 800;
+      const outputTokens = body.estimatedOutputTokens ?? 500 + toolCalls * 200;
+      const costCents = Math.max(
+        1,
+        Math.round((inputTokens * 0.00002 + outputTokens * 0.00006) / 10),
+      );
+      const confidence =
+        toolCalls <= 5 ? "high" : toolCalls <= 20 ? "medium" : "low";
+      res.json(
+        toolResponse.ok({
+          data: {
+            operation: body.operation,
+            toolCalls,
+            inputTokens,
+            outputTokens,
+            estimatedCostCents: costCents,
+            confidence,
+          },
+          message: `Estimated ~${costCents}¢ (${toolCalls} tool calls, ${inputTokens + outputTokens} tokens).`,
+          nextHint:
+            costCents >= 50
+              ? "This is a costly operation — consider paperclipAskHuman for approval before proceeding, or narrow the scope."
+              : "Within normal budget. Proceed.",
+        }),
+      );
+    },
+  );
+
+  // ---------- paperclipDone (clean exit signal) ----------
+
+  router.post("/agent-tools/done", validate(doneSchema), async (req, res) => {
+    const body = req.body as z.infer<typeof doneSchema>;
+    res.json(
+      toolResponse.ok({
+        data: {
+          outcome: body.outcome ?? "completed",
+          confidence: body.confidence ?? "medium",
+          openQuestions: body.openQuestions ?? [],
+        },
+        message: "Run marked done. The tool loop will exit after this turn.",
+      }),
+    );
   });
 
   router.post("/agent-tools/memory-write", validate(memoryWriteSchema), async (req, res) => {
@@ -651,6 +948,10 @@ export function agentToolRoutes(db: Db) {
       comments: r.commentsPosted,
       memories: r.memoriesWritten,
       asks: r.humanQuestionsAsked,
+      // SLA signals — null when no finished runs in window.
+      successPct: r.successRatePct,
+      p50Ms: r.p50DurationMs,
+      avgCents: r.avgCostCents,
     }));
     // Pre-compute aggregates so the agent doesn't have to sum in its head.
     const breakdown: Record<string, number> = {

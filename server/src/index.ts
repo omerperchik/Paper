@@ -597,6 +597,19 @@ export async function startServer(): Promise<StartedServer> {
     // completion (via the heartbeat kick) so agents chain into the next task
     // without waiting for the next interval ("always on" dispatch).
     const runSchedulerSweep = (kind: "periodic" | "kick") => {
+      // Event-driven scheduler: drain wake events first. Cron tickTimers
+      // below is a safety net for anything that didn't emit a wake event.
+      void heartbeat
+        .tickWakeEvents(25)
+        .then((result) => {
+          if (result.processed > 0 || result.failed > 0) {
+            logger.info({ ...result, kind }, "wake events tick processed");
+          }
+        })
+        .catch((err) => {
+          logger.error({ err, kind }, "wake events tick failed");
+        });
+
       void heartbeat
         .tickTimers(new Date())
         .then((result) => {
