@@ -321,6 +321,29 @@ export const DELEGATION_TOOL_DEFINITIONS: DelegationToolDefinition[] = [
   {
     type: "function",
     function: {
+      name: "paperclipAgentStats",
+      description:
+        "Get an activity leaderboard for your team (your reports_to subtree) or the full company over a recent time window. Shows per-agent counts of heartbeats, issues, comments, memories, and human questions. Use this to decide who to delegate to (pick agents with low queue depth) or to spot teammates who are stuck (0 activity).",
+      parameters: {
+        type: "object",
+        properties: {
+          scope: {
+            type: "string",
+            enum: ["team", "company"],
+            description: "team = your subtree (you + direct/indirect reports). company = all agents. Default: team.",
+          },
+          window: {
+            type: "string",
+            description: "Time window like '24h', '7d', '14d', '4w'. Default: 7d.",
+          },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "paperclipUpdateIssue",
       description:
         "Update an existing issue's status, priority, assignee, or title. Use this to move issues through the workflow (todo → in_progress → done), reassign work, or escalate priority.",

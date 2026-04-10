@@ -12,6 +12,7 @@ export { goalService } from "./goals.js";
 export { activityService, type ActivityFilters } from "./activity.js";
 export { approvalService } from "./approvals.js";
 export { agentMemoryService } from "./agent-memory.js";
+export { teamFeedService, type FeedEvent, type FeedEventType, type LeaderboardRow } from "./team-feed.js";
 export { budgetService } from "./budgets.js";
 export { secretService } from "./secrets.js";
 export { routineService } from "./routines.js";

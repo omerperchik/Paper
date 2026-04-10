@@ -570,6 +570,12 @@ async function dispatchToolCall(
       if (typeof args.limit === "number") body.limit = args.limit;
       return httpJson("POST", `/api/agent-tools/memory-search`, body);
     }
+    case "paperclipAgentStats": {
+      const body: Record<string, unknown> = {};
+      if (args.scope === "team" || args.scope === "company") body.scope = args.scope;
+      if (typeof args.window === "string") body.window = args.window;
+      return httpJson("POST", `/api/agent-tools/agent-stats`, body);
+    }
     case "paperclipRepoListFiles": {
       const repo = typeof args.repo === "string" ? args.repo : "";
       if (!repo) return { ok: false, result: "repo is required" };

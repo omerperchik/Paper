@@ -17,6 +17,7 @@ import { z } from "zod";
 import type { Db } from "@paperclipai/db";
 import { validate } from "../middleware/validate.js";
 import { agentMemoryService } from "../services/agent-memory.js";
+import { teamFeedService } from "../services/team-feed.js";
 import { webSearch, formatSearchResultsForPrompt } from "../services/web-search.js";
 import { unauthorized, unprocessable } from "../errors.js";
 
@@ -41,6 +42,11 @@ const memoryWriteSchema = z.object({
 const memorySearchSchema = z.object({
   query: z.string().min(1).max(512),
   limit: z.number().int().min(1).max(20).optional(),
+});
+
+const agentStatsSchema = z.object({
+  scope: z.enum(["team", "company"]).optional().default("team"),
+  window: z.string().regex(/^\d+[hdw]$/).optional().default("7d"),
 });
 
 const repoRef = z.object({
@@ -166,6 +172,7 @@ async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Respons
 export function agentToolRoutes(db: Db) {
   const router = Router();
   const memory = agentMemoryService(db);
+  const feed = teamFeedService(db);
 
   router.post("/agent-tools/web-search", validate(webSearchSchema), async (req, res) => {
     requireAgentActor(req);
@@ -447,6 +454,31 @@ export function agentToolRoutes(db: Db) {
         content: r.content,
         writtenByAgentId: r.agentId,
         updatedAt: r.updatedAt.toISOString(),
+      })),
+    });
+  });
+
+  router.post("/agent-tools/agent-stats", validate(agentStatsSchema), async (req, res) => {
+    const { agentId, companyId } = requireAgentActor(req);
+    const { scope, window } = req.body as z.infer<typeof agentStatsSchema>;
+    // team scope = this agent's reports_to subtree; company = all agents.
+    const managerId = scope === "company" ? null : agentId;
+    const rows = await feed.leaderboard(companyId, managerId, window);
+    res.json({
+      scope,
+      window,
+      count: rows.length,
+      rows: rows.map((r) => ({
+        agentId: r.agentId,
+        agentName: r.agentName,
+        role: r.role,
+        reportsTo: r.reportsTo,
+        heartbeatRunsOk: r.heartbeatRunsOk,
+        heartbeatRunsFailed: r.heartbeatRunsFailed,
+        issuesCreated: r.issuesCreated,
+        commentsPosted: r.commentsPosted,
+        memoriesWritten: r.memoriesWritten,
+        humanQuestionsAsked: r.humanQuestionsAsked,
       })),
     });
   });
