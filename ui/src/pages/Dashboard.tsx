@@ -16,7 +16,7 @@ import { StatusIcon } from "../components/StatusIcon";
 import { Identity } from "../components/Identity";
 import { timeAgo } from "../lib/timeAgo";
 import { formatCents } from "../lib/utils";
-import { Bot, CircleDot, DollarSign, ShieldCheck, LayoutDashboard, PauseCircle } from "lucide-react";
+import { Bot, CircleDot, DollarSign, ShieldCheck, LayoutDashboard, PauseCircle, Receipt } from "lucide-react";
 import { LiveFeed } from "../components/LiveFeed";
 import { ChartCard, RunActivityChart, PriorityChart, IssueStatusChart, SuccessRateChart } from "../components/ActivityCharts";
 import { FailureClassesPanel } from "../components/FailureClassesPanel";
@@ -123,6 +123,19 @@ export function Dashboard() {
               : data.costs.monthBudgetCents > 0 && data.costs.monthUtilizationPercent >= 70
                 ? "warn"
                 : "default",
+        },
+        {
+          icon: Receipt,
+          value:
+            data.tasks.done > 0
+              ? formatCents(Math.round(data.costs.monthSpendCents / data.tasks.done))
+              : "—",
+          label: "Cost / task",
+          hint:
+            data.tasks.done > 0
+              ? `${data.tasks.done} completed this month`
+              : "no completed tasks yet",
+          to: "/costs",
         },
         {
           icon: ShieldCheck,

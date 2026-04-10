@@ -457,6 +457,13 @@ async function dispatchToolCall(
   };
   const base = opts.apiBase.replace(/\/+$/, "");
 
+  // Dispatch-level response cap. Most envelope tool responses are well
+  // under this, but raw list endpoints (paperclipListAgents etc.) can be
+  // large. We cap to protect the model's context, but unlike before we
+  // tell the agent honestly when we had to truncate — silent truncation
+  // is an agent-ergonomic bug (see AXI playbook, axi.md).
+  const DISPATCH_RESPONSE_CAP = 8_000;
+
   const httpJson = async (method: string, path: string, body?: unknown) => {
     const response = await fetchWithTimeout(
       `${base}${path}`,
@@ -469,9 +476,20 @@ async function dispatchToolCall(
     );
     const text = await response.text();
     if (!response.ok) {
-      return { ok: false, result: `HTTP ${response.status}: ${text.slice(0, 500)}` };
+      return {
+        ok: false,
+        result: `HTTP ${response.status}: ${text.slice(0, 500)}`,
+      };
     }
-    return { ok: true, result: text.length > 4000 ? `${text.slice(0, 4000)}…[truncated]` : text };
+    if (text.length <= DISPATCH_RESPONSE_CAP) {
+      return { ok: true, result: text };
+    }
+    // Over the cap — tell the agent exactly what happened so it can
+    // retry with a tighter filter or call again with pagination.
+    return {
+      ok: true,
+      result: `${text.slice(0, DISPATCH_RESPONSE_CAP)}\n\n[dispatch: truncated ${text.length - DISPATCH_RESPONSE_CAP} of ${text.length} chars. If you need more, call this tool again with tighter filters (status, limit, assigneeAgentId, offset, etc).]`,
+    };
   };
 
   switch (name) {
@@ -553,7 +571,10 @@ async function dispatchToolCall(
     case "paperclipWebFetch": {
       const url = typeof args.url === "string" ? args.url : "";
       if (!url) return { ok: false, result: "url is required" };
-      return httpJson("POST", `/api/agent-tools/web-fetch`, { url });
+      const body: Record<string, unknown> = { url };
+      if (typeof args.offset === "number") body.offset = args.offset;
+      if (typeof args.maxBytes === "number") body.maxBytes = args.maxBytes;
+      return httpJson("POST", `/api/agent-tools/web-fetch`, body);
     }
     case "paperclipMemoryWrite": {
       const content = typeof args.content === "string" ? args.content : "";
@@ -590,6 +611,7 @@ async function dispatchToolCall(
       if (!repo || !path) return { ok: false, result: "repo and path are required" };
       const body: Record<string, unknown> = { repo, path };
       if (typeof args.ref === "string") body.ref = args.ref;
+      if (typeof args.offset === "number") body.offset = args.offset;
       return httpJson("POST", `/api/agent-tools/repo-read-file`, body);
     }
     case "paperclipRepoWriteFile": {

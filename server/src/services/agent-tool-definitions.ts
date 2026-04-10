@@ -183,13 +183,21 @@ export const DELEGATION_TOOL_DEFINITIONS: DelegationToolDefinition[] = [
     function: {
       name: "paperclipWebFetch",
       description:
-        "Fetch the text content of a web page by URL and return it as plain text. Use this after paperclipWebSearch to read the full content of a promising result, or directly with a URL a teammate gave you. Returns truncated text if the page is large. Will NOT work for pages behind authentication, JavaScript-only apps, or paywalls.",
+        "Fetch the text content of a web page by URL and return it as plain text. Use this after paperclipWebSearch to read the full content of a promising result, or directly with a URL a teammate gave you. Large pages are truncated; the response tells you `originalBytes` and `nextHint` will include the exact `offset` to pass to read the next chunk. Will NOT work for pages behind authentication, JavaScript-only apps, or paywalls.",
       parameters: {
         type: "object",
         properties: {
           url: {
             type: "string",
             description: "The fully-qualified URL to fetch (must include https://).",
+          },
+          offset: {
+            type: "number",
+            description: "Byte offset to start reading from. Use this for pagination on large pages — call first without offset, then re-call with the offset given in the response's nextHint. Default: 0.",
+          },
+          maxBytes: {
+            type: "number",
+            description: "Maximum bytes to return in a single call. Default: 12000. Max: 200000.",
           },
         },
         required: ["url"],
@@ -267,13 +275,14 @@ export const DELEGATION_TOOL_DEFINITIONS: DelegationToolDefinition[] = [
     function: {
       name: "paperclipRepoReadFile",
       description:
-        "Read the contents of a single file from a GitHub repository. Returns the file text (base64-decoded) plus its sha. Use paperclipRepoListFiles first to find files. Do not use for binary files.",
+        "Read the contents of a single file from a GitHub repository. Returns the file text (base64-decoded) plus its sha. Large files are truncated; the response tells you `originalBytes` and `nextHint` will include the exact `offset` for the next chunk. Use paperclipRepoListFiles first to find files. Do not use for binary files.",
       parameters: {
         type: "object",
         properties: {
           repo: { type: "string", description: "GitHub repo in 'owner/name' format." },
           path: { type: "string", description: "File path within the repo, e.g. 'src/index.ts'." },
           ref: { type: "string", description: "Branch, tag, or commit sha. Defaults to default branch." },
+          offset: { type: "number", description: "Byte offset to start reading from. Use for pagination on large files." },
         },
         required: ["repo", "path"],
       },

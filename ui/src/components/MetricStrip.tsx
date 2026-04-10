@@ -26,7 +26,7 @@ const TONE_CLASSES: Record<NonNullable<MetricStripItem["tone"]>, string> = {
 
 export function MetricStrip({ items }: { items: MetricStripItem[] }) {
   return (
-    <div className="grid grid-cols-2 divide-border rounded-xl border border-border bg-card/40 sm:grid-cols-4 sm:divide-x">
+    <div className="grid grid-cols-2 divide-border rounded-xl border border-border bg-card/40 sm:grid-cols-3 lg:grid-cols-5 sm:divide-x">
       {items.map((item, i) => {
         const Icon = item.icon;
         const tone = TONE_CLASSES[item.tone ?? "default"];

@@ -15,6 +15,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
+import { toolResponse } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
 import { agentMemoryService } from "../services/agent-memory.js";
 import { teamFeedService } from "../services/team-feed.js";
@@ -31,6 +32,7 @@ const webSearchSchema = z.object({
 const webFetchSchema = z.object({
   url: z.string().url().max(2048),
   maxBytes: z.number().int().min(1).max(200_000).optional(),
+  offset: z.number().int().min(0).max(10_000_000).optional(),
 });
 
 const memoryWriteSchema = z.object({
@@ -59,6 +61,7 @@ const repoListSchema = repoRef.extend({
 const repoReadSchema = repoRef.extend({
   path: z.string().min(1).max(1024),
   ref: z.string().max(256).optional(),
+  offset: z.number().int().min(0).max(10_000_000).optional(),
 });
 const repoWriteSchema = repoRef.extend({
   path: z.string().min(1).max(1024),
@@ -179,23 +182,46 @@ export function agentToolRoutes(db: Db) {
     const { query, maxResults } = req.body as z.infer<typeof webSearchSchema>;
     try {
       const results = await webSearch(query, { maxResults: maxResults ?? 5 });
-      res.json({
-        query,
-        count: results.length,
-        results,
-        formatted: formatSearchResultsForPrompt(query, results),
-      });
+      if (results.length === 0) {
+        res.json(
+          toolResponse.empty(
+            `No web results for “${query}”. The search provider returned 0 hits.`,
+            "Try broader terms, remove quotes, or try a domain-specific query (e.g. 'site:github.com ...').",
+          ),
+        );
+        return;
+      }
+      // Trim each result to 3 fields: title, url, snippet. No ranking, no favicons,
+      // no raw HTML. Agents can call paperclipWebFetch on the URL if they want more.
+      const items = results.map((r) => ({
+        title: r.title,
+        url: r.url,
+        snippet: r.snippet,
+      }));
+      res.json(
+        toolResponse.list({
+          items,
+          nextHint:
+            "Pick the 1–2 most relevant URLs and call paperclipWebFetch on each to read the page content.",
+          // Keep `formatted` as an optional companion field for the gemma-local
+          // prompt formatter — not in the envelope spec but backwards-compatible.
+          message: formatSearchResultsForPrompt(query, results),
+        }),
+      );
     } catch (err) {
-      res.status(502).json({
-        error: "web_search_failed",
-        message: err instanceof Error ? err.message : String(err),
-      });
+      res.status(502).json(
+        toolResponse.fail({
+          code: "web_search_failed",
+          message: err instanceof Error ? err.message : String(err),
+          retry: true,
+        }),
+      );
     }
   });
 
   router.post("/agent-tools/web-fetch", validate(webFetchSchema), async (req, res) => {
     requireAgentActor(req);
-    const { url, maxBytes } = req.body as z.infer<typeof webFetchSchema>;
+    const { url, maxBytes, offset } = req.body as z.infer<typeof webFetchSchema>;
 
     // Basic SSRF guard: block private/loopback hosts.
     const parsed = new URL(url);
@@ -218,30 +244,55 @@ export function agentToolRoutes(db: Db) {
     try {
       const response = await fetchWithTimeout(url, 15_000);
       if (!response.ok) {
-        res.status(502).json({
-          error: "web_fetch_failed",
-          status: response.status,
-          message: `HTTP ${response.status} ${response.statusText}`,
-        });
+        res.status(502).json(
+          toolResponse.fail({
+            code: "web_fetch_http_error",
+            message: `HTTP ${response.status} ${response.statusText} for ${url}`,
+            retry: response.status >= 500 || response.status === 429,
+          }),
+        );
         return;
       }
       const contentType = response.headers.get("content-type") ?? "";
       const raw = await response.text();
-      const text = /html|xml/i.test(contentType) ? htmlToText(raw) : raw;
+      const fullText = /html|xml/i.test(contentType) ? htmlToText(raw) : raw;
+      const originalBytes = fullText.length;
+      const startAt = offset ?? 0;
       const cap = maxBytes ?? 12_000;
-      const truncated = text.length > cap;
+      const sliced = fullText.slice(startAt, startAt + cap);
+      const hasMore = startAt + sliced.length < originalBytes;
+      const nextOffset = startAt + sliced.length;
+      const nextHint = hasMore
+        ? `Page continues. To read more, call paperclipWebFetch again with the same url and offset=${nextOffset}.`
+        : "End of document reached. Extract the facts you need and store them with paperclipMemoryWrite so you don't have to re-fetch.";
       res.json({
-        url,
-        contentType,
-        status: response.status,
-        truncated,
-        text: truncated ? `${text.slice(0, cap)}…[truncated ${text.length - cap} chars]` : text,
+        ok: true,
+        data: {
+          url,
+          contentType,
+          status: response.status,
+          offset: startAt,
+          text: sliced,
+        },
+        truncated: hasMore,
+        originalBytes,
+        returnedBytes: sliced.length,
+        message:
+          originalBytes === 0
+            ? "The page fetched successfully but contained no extractable text (likely a JS-heavy SPA or a binary asset)."
+            : hasMore
+              ? `Showing bytes ${startAt}..${nextOffset} of ${originalBytes}.`
+              : `Full document (${originalBytes} chars) returned.`,
+        nextHint,
       });
     } catch (err) {
-      res.status(502).json({
-        error: "web_fetch_failed",
-        message: err instanceof Error ? err.message : String(err),
-      });
+      res.status(502).json(
+        toolResponse.fail({
+          code: "web_fetch_failed",
+          message: err instanceof Error ? err.message : String(err),
+          retry: true,
+        }),
+      );
     }
   });
 
@@ -255,15 +306,23 @@ export function agentToolRoutes(db: Db) {
       key: key ?? "",
       content,
     });
-    res.json({
-      ok: true,
-      memory: {
-        id: memoryRow.id,
-        scope: memoryRow.scope,
-        key: memoryRow.key,
-        updatedAt: memoryRow.updatedAt.toISOString(),
-      },
-    });
+    res.json(
+      toolResponse.ok({
+        data: {
+          id: memoryRow.id,
+          scope: memoryRow.scope,
+          key: memoryRow.key,
+          updatedAt: memoryRow.updatedAt.toISOString(),
+        },
+        message: `Saved ${content.length} chars to ${scope} memory${key ? `/${key}` : ""}.`,
+        nextHint:
+          scope === "self"
+            ? "This memory is private to you. To share with your team, call again with scope='team'."
+            : scope === "team"
+              ? "Your direct reports and your manager can now read this via paperclipMemorySearch."
+              : "All agents in the company can now read this via paperclipMemorySearch.",
+      }),
+    );
   });
 
   // ---------- git tools ----------
@@ -275,56 +334,101 @@ export function agentToolRoutes(db: Db) {
     const qs = ref ? `?ref=${encodeURIComponent(ref)}` : "";
     const r = await githubFetch(`/repos/${repo}/contents/${encodeURI(cleanPath)}${qs}`);
     if (!r.ok) {
-      res.status(r.status).json({ error: "github_error", status: r.status, message: r.text.slice(0, 500) });
+      res.status(r.status).json(
+        toolResponse.fail({
+          code: r.status === 404 ? "github_not_found" : "github_error",
+          message: `${repo}${cleanPath ? `/${cleanPath}` : ""}${ref ? `@${ref}` : ""}: ${r.text.slice(0, 300)}`,
+          retry: r.status >= 500 || r.status === 429,
+        }),
+      );
       return;
     }
-    const items = Array.isArray(r.json) ? r.json : [r.json];
-    res.json({
-      repo,
-      path: cleanPath,
-      items: items
-        .filter((x): x is Record<string, unknown> => typeof x === "object" && x !== null)
-        .map((x) => ({
-          name: x.name,
-          path: x.path,
-          type: x.type,
-          size: x.size,
-          sha: x.sha,
-        })),
-    });
+    const raw = Array.isArray(r.json) ? r.json : [r.json];
+    const entries = raw
+      .filter((x): x is Record<string, unknown> => typeof x === "object" && x !== null)
+      .map((x) => ({
+        name: String(x.name ?? ""),
+        path: String(x.path ?? ""),
+        type: String(x.type ?? ""),
+        size: typeof x.size === "number" ? x.size : 0,
+      }));
+    if (entries.length === 0) {
+      res.json(
+        toolResponse.empty(
+          `${repo}/${cleanPath || "(root)"} is empty${ref ? ` at ${ref}` : ""}.`,
+          "Double-check the path and ref; GitHub returns empty rather than 404 for empty directories.",
+        ),
+      );
+      return;
+    }
+    const breakdown: Record<string, number> = {};
+    for (const e of entries) breakdown[e.type] = (breakdown[e.type] ?? 0) + 1;
+    res.json(
+      toolResponse.list({
+        items: entries,
+        breakdown,
+        nextHint:
+          "Call paperclipRepoReadFile with the path of any file you want to inspect. Directories can be listed recursively by calling this tool again with their path.",
+      }),
+    );
   });
 
   router.post("/agent-tools/repo-read-file", validate(repoReadSchema), async (req, res) => {
     requireAgentActor(req);
-    const { repo, path, ref } = req.body as z.infer<typeof repoReadSchema>;
+    const { repo, path, ref, offset } = req.body as z.infer<typeof repoReadSchema>;
     const qs = ref ? `?ref=${encodeURIComponent(ref)}` : "";
     const r = await githubFetch(`/repos/${repo}/contents/${encodeURI(path)}${qs}`);
     if (!r.ok) {
-      res.status(r.status).json({ error: "github_error", status: r.status, message: r.text.slice(0, 500) });
+      res.status(r.status).json(
+        toolResponse.fail({
+          code: r.status === 404 ? "github_not_found" : "github_error",
+          message: `${repo}/${path}${ref ? `@${ref}` : ""}: ${r.text.slice(0, 300)}`,
+          retry: r.status >= 500 || r.status === 429,
+        }),
+      );
       return;
     }
     const obj = (r.json as Record<string, unknown>) ?? {};
     if (obj.type !== "file") {
-      res.status(400).json({ error: "not_a_file", message: `path ${path} is not a file` });
+      res.status(400).json(
+        toolResponse.fail({
+          code: "not_a_file",
+          message: `${repo}/${path} is a ${obj.type}, not a file. Call paperclipRepoListFiles with this path to list its contents.`,
+        }),
+      );
       return;
     }
     const encoding = typeof obj.encoding === "string" ? obj.encoding : "base64";
     const contentB64 = typeof obj.content === "string" ? obj.content : "";
-    let content: string;
-    if (encoding === "base64") {
-      content = Buffer.from(contentB64.replace(/\n/g, ""), "base64").toString("utf8");
-    } else {
-      content = contentB64;
-    }
+    const fullContent =
+      encoding === "base64"
+        ? Buffer.from(contentB64.replace(/\n/g, ""), "base64").toString("utf8")
+        : contentB64;
+    const originalBytes = fullContent.length;
+    const startAt = offset ?? 0;
     const maxChars = 12_000;
-    const truncated = content.length > maxChars;
+    const sliced = fullContent.slice(startAt, startAt + maxChars);
+    const hasMore = startAt + sliced.length < originalBytes;
+    const nextOffset = startAt + sliced.length;
     res.json({
-      repo,
-      path,
-      sha: obj.sha,
-      size: obj.size,
-      truncated,
-      content: truncated ? `${content.slice(0, maxChars)}…[truncated ${content.length - maxChars} chars]` : content,
+      ok: true,
+      data: {
+        repo,
+        path,
+        sha: obj.sha,
+        size: obj.size,
+        offset: startAt,
+        content: sliced,
+      },
+      truncated: hasMore,
+      originalBytes,
+      returnedBytes: sliced.length,
+      message: hasMore
+        ? `Showing bytes ${startAt}..${nextOffset} of ${originalBytes}.`
+        : `Full file (${originalBytes} chars) returned.`,
+      nextHint: hasMore
+        ? `File continues. Call again with offset=${nextOffset} for the next chunk.`
+        : "If you want to edit this file, call paperclipRepoWriteFile with the same path and a new content string plus a branch name.",
     });
   });
 
@@ -337,23 +441,33 @@ export function agentToolRoutes(db: Db) {
     if (!baseRef) {
       const repoInfo = await githubFetch(`/repos/${repo}`);
       if (!repoInfo.ok) {
-        res.status(repoInfo.status).json({ error: "github_error", message: repoInfo.text.slice(0, 500) });
+        res.status(repoInfo.status).json(
+          toolResponse.fail({ code: "github_error", message: repoInfo.text.slice(0, 300) }),
+        );
         return;
       }
       baseRef = ((repoInfo.json as Record<string, unknown>)?.default_branch as string) ?? "main";
     }
 
     // Ensure target branch exists. If it doesn't, create it from baseRef.
+    let createdBranch = false;
     const refProbe = await githubFetch(`/repos/${repo}/git/ref/heads/${encodeURIComponent(branch)}`);
     if (!refProbe.ok && refProbe.status === 404) {
       const baseProbe = await githubFetch(`/repos/${repo}/git/ref/heads/${encodeURIComponent(baseRef)}`);
       if (!baseProbe.ok) {
-        res.status(baseProbe.status).json({ error: "github_error", message: `base branch ${baseRef} not found: ${baseProbe.text.slice(0, 300)}` });
+        res.status(baseProbe.status).json(
+          toolResponse.fail({
+            code: "github_base_branch_missing",
+            message: `base branch ${baseRef} not found: ${baseProbe.text.slice(0, 200)}`,
+          }),
+        );
         return;
       }
       const baseSha = ((baseProbe.json as Record<string, unknown>)?.object as Record<string, unknown> | undefined)?.sha;
       if (typeof baseSha !== "string") {
-        res.status(500).json({ error: "github_error", message: "could not resolve base branch sha" });
+        res.status(500).json(
+          toolResponse.fail({ code: "github_error", message: "could not resolve base branch sha" }),
+        );
         return;
       }
       const createRef = await githubFetch(`/repos/${repo}/git/refs`, {
@@ -361,11 +475,19 @@ export function agentToolRoutes(db: Db) {
         body: { ref: `refs/heads/${branch}`, sha: baseSha },
       });
       if (!createRef.ok) {
-        res.status(createRef.status).json({ error: "github_error", message: `failed to create branch: ${createRef.text.slice(0, 300)}` });
+        res.status(createRef.status).json(
+          toolResponse.fail({
+            code: "github_branch_create_failed",
+            message: `failed to create branch ${branch}: ${createRef.text.slice(0, 200)}`,
+          }),
+        );
         return;
       }
+      createdBranch = true;
     } else if (!refProbe.ok) {
-      res.status(refProbe.status).json({ error: "github_error", message: refProbe.text.slice(0, 500) });
+      res.status(refProbe.status).json(
+        toolResponse.fail({ code: "github_error", message: refProbe.text.slice(0, 300) }),
+      );
       return;
     }
 
@@ -378,6 +500,7 @@ export function agentToolRoutes(db: Db) {
         existingSha = obj.sha;
       }
     }
+    const isUpdate = Boolean(existingSha);
 
     const put = await githubFetch(`/repos/${repo}/contents/${encodeURI(path)}`, {
       method: "PUT",
@@ -389,18 +512,34 @@ export function agentToolRoutes(db: Db) {
       },
     });
     if (!put.ok) {
-      res.status(put.status).json({ error: "github_error", status: put.status, message: put.text.slice(0, 500) });
+      res.status(put.status).json(
+        toolResponse.fail({
+          code: "github_write_failed",
+          message: `PUT ${repo}/${path}@${branch}: ${put.text.slice(0, 300)}`,
+          retry: put.status >= 500,
+        }),
+      );
       return;
     }
     const result = put.json as Record<string, unknown>;
-    res.json({
-      ok: true,
-      repo,
-      branch,
-      path,
-      commit: (result?.commit as Record<string, unknown> | undefined)?.sha,
-      content: (result?.content as Record<string, unknown> | undefined)?.sha,
-    });
+    res.json(
+      toolResponse.ok({
+        data: {
+          repo,
+          branch,
+          path,
+          commitSha: (result?.commit as Record<string, unknown> | undefined)?.sha,
+          fileSha: (result?.content as Record<string, unknown> | undefined)?.sha,
+          createdBranch,
+          operation: isUpdate ? "update" : "create",
+        },
+        message: `${isUpdate ? "Updated" : "Created"} ${path} on branch ${branch}${createdBranch ? ` (branch was created from ${baseRef})` : ""}.`,
+        nextHint:
+          "To open a pull request for this change, call paperclipRepoOpenPr with head='" +
+          branch +
+          "' and an appropriate title + body.",
+      }),
+    );
   });
 
   router.post("/agent-tools/repo-open-pr", validate(repoOpenPrSchema), async (req, res) => {
@@ -410,7 +549,9 @@ export function agentToolRoutes(db: Db) {
     if (!targetBase) {
       const repoInfo = await githubFetch(`/repos/${repo}`);
       if (!repoInfo.ok) {
-        res.status(repoInfo.status).json({ error: "github_error", message: repoInfo.text.slice(0, 500) });
+        res.status(repoInfo.status).json(
+          toolResponse.fail({ code: "github_error", message: repoInfo.text.slice(0, 300) }),
+        );
         return;
       }
       targetBase = ((repoInfo.json as Record<string, unknown>)?.default_branch as string) ?? "main";
@@ -420,19 +561,31 @@ export function agentToolRoutes(db: Db) {
       body: { title, body: body ?? "", head, base: targetBase },
     });
     if (!pr.ok) {
-      res.status(pr.status).json({ error: "github_error", status: pr.status, message: pr.text.slice(0, 500) });
+      res.status(pr.status).json(
+        toolResponse.fail({
+          code: "github_pr_failed",
+          message: `POST ${repo}/pulls: ${pr.text.slice(0, 300)}`,
+          retry: pr.status >= 500,
+        }),
+      );
       return;
     }
     const obj = pr.json as Record<string, unknown>;
-    res.json({
-      ok: true,
-      repo,
-      number: obj.number,
-      url: obj.html_url,
-      state: obj.state,
-      head: (obj.head as Record<string, unknown> | undefined)?.ref,
-      base: (obj.base as Record<string, unknown> | undefined)?.ref,
-    });
+    res.json(
+      toolResponse.ok({
+        data: {
+          repo,
+          number: obj.number,
+          url: obj.html_url,
+          state: obj.state,
+          head: (obj.head as Record<string, unknown> | undefined)?.ref,
+          base: (obj.base as Record<string, unknown> | undefined)?.ref,
+        },
+        message: `Opened PR #${obj.number} — “${title}” (${head} → ${targetBase}).`,
+        nextHint:
+          "Tell the humans about the PR with paperclipAskHuman or post a comment on the originating issue with paperclipAddComment.",
+      }),
+    );
   });
 
   router.post("/agent-tools/memory-search", validate(memorySearchSchema), async (req, res) => {
@@ -444,18 +597,33 @@ export function agentToolRoutes(db: Db) {
       query,
       limit: limit ?? 8,
     });
-    res.json({
-      query,
-      count: rows.length,
-      results: rows.map((r) => ({
-        id: r.id,
-        scope: r.scope,
-        key: r.key,
-        content: r.content,
-        writtenByAgentId: r.agentId,
-        updatedAt: r.updatedAt.toISOString(),
-      })),
-    });
+    if (rows.length === 0) {
+      res.json(
+        toolResponse.empty(
+          `No memories matching “${query}” in any scope you can read (self + team + company).`,
+          "Try a broader query, or write the fact now with paperclipMemoryWrite so future runs can find it.",
+        ),
+      );
+      return;
+    }
+    const breakdown: Record<string, number> = { self: 0, team: 0, company: 0 };
+    for (const r of rows) breakdown[r.scope] = (breakdown[r.scope] ?? 0) + 1;
+    // Trimmed shape: 4 fields instead of 6. Drop writtenByAgentId (rarely
+    // needed, adds noise) and use a shorter ISO date.
+    const items = rows.map((r) => ({
+      scope: r.scope,
+      key: r.key || undefined,
+      content: r.content,
+      updatedAt: r.updatedAt.toISOString().slice(0, 10),
+    }));
+    res.json(
+      toolResponse.list({
+        items,
+        breakdown,
+        nextHint:
+          "Use the matching content directly in your reasoning. If a memory is stale, overwrite it with paperclipMemoryWrite using the same scope+key.",
+      }),
+    );
   });
 
   router.post("/agent-tools/agent-stats", validate(agentStatsSchema), async (req, res) => {
@@ -464,23 +632,65 @@ export function agentToolRoutes(db: Db) {
     // team scope = this agent's reports_to subtree; company = all agents.
     const managerId = scope === "company" ? null : agentId;
     const rows = await feed.leaderboard(companyId, managerId, window);
-    res.json({
-      scope,
-      window,
-      count: rows.length,
-      rows: rows.map((r) => ({
-        agentId: r.agentId,
-        agentName: r.agentName,
-        role: r.role,
-        reportsTo: r.reportsTo,
-        heartbeatRunsOk: r.heartbeatRunsOk,
-        heartbeatRunsFailed: r.heartbeatRunsFailed,
-        issuesCreated: r.issuesCreated,
-        commentsPosted: r.commentsPosted,
-        memoriesWritten: r.memoriesWritten,
-        humanQuestionsAsked: r.humanQuestionsAsked,
-      })),
-    });
+    if (rows.length === 0) {
+      res.json(
+        toolResponse.empty(
+          `No agents found in your ${scope} over the last ${window}.`,
+          "If you expected to see teammates here, check that you have direct or indirect reports.",
+        ),
+      );
+      return;
+    }
+    // Trimmed row: keep the top signals. Drop reportsTo (agent already
+    // knows the org chart via context), drop role (name is enough).
+    const items = rows.map((r) => ({
+      name: r.agentName,
+      runsOk: r.heartbeatRunsOk,
+      runsFailed: r.heartbeatRunsFailed,
+      issues: r.issuesCreated,
+      comments: r.commentsPosted,
+      memories: r.memoriesWritten,
+      asks: r.humanQuestionsAsked,
+    }));
+    // Pre-compute aggregates so the agent doesn't have to sum in its head.
+    const breakdown: Record<string, number> = {
+      totalRuns: 0,
+      totalFailures: 0,
+      totalIssues: 0,
+      totalComments: 0,
+      totalMemories: 0,
+      totalAsks: 0,
+    };
+    let idleCount = 0;
+    for (const r of rows) {
+      breakdown.totalRuns += r.heartbeatRunsOk;
+      breakdown.totalFailures += r.heartbeatRunsFailed;
+      breakdown.totalIssues += r.issuesCreated;
+      breakdown.totalComments += r.commentsPosted;
+      breakdown.totalMemories += r.memoriesWritten;
+      breakdown.totalAsks += r.humanQuestionsAsked;
+      if (
+        r.heartbeatRunsOk === 0 &&
+        r.issuesCreated === 0 &&
+        r.commentsPosted === 0 &&
+        r.memoriesWritten === 0
+      ) {
+        idleCount += 1;
+      }
+    }
+    breakdown.idle = idleCount;
+    const busiest = items[0]?.name ?? "(none)";
+    res.json(
+      toolResponse.list({
+        items,
+        breakdown,
+        message: `Leaderboard over last ${window}, ${scope} scope. Busiest: ${busiest}. ${idleCount} idle agent(s).`,
+        nextHint:
+          idleCount > 0
+            ? "Idle agents are good delegation targets. Use paperclipListAgents to find their id and paperclipCreateIssue to assign work."
+            : "Everyone is busy. Consider prioritising with paperclipUpdateIssue or raising a blocker via paperclipAskHuman.",
+      }),
+    );
   });
 
   return router;

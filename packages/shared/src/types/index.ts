@@ -118,6 +118,8 @@ export type {
 } from "./issue.js";
 export type { Goal } from "./goal.js";
 export type { Approval, ApprovalComment } from "./approval.js";
+export type { AgentToolResponse, AgentToolError } from "./agent-tool.js";
+export { toolResponse } from "./agent-tool.js";
 export type {
   BudgetPolicy,
   BudgetPolicySummary,

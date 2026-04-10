@@ -360,6 +360,8 @@ export type {
   ProviderQuotaResult,
 } from "./types/index.js";
 
+export { toolResponse } from "./types/agent-tool.js";
+
 export {
   DEFAULT_FEEDBACK_DATA_SHARING_PREFERENCE,
   FEEDBACK_TARGET_TYPES,
