@@ -19,6 +19,8 @@ import {
 import { isUuidLike, normalizeAgentUrlKey } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import { normalizeAgentPermissions } from "./agent-permissions.js";
+import { integrationService } from "./integrations.js";
+import { defaultProvidersForRole } from "./integration-providers/catalog.js";
 import { REDACTED_EVENT_VALUE, sanitizeRecord } from "../redaction.js";
 
 function hashToken(token: string) {
@@ -403,6 +405,32 @@ export function agentService(db: Db) {
         .values({ ...data, name: uniqueName, companyId, role, permissions: normalizedPermissions })
         .returning()
         .then((rows) => rows[0]);
+
+      // Role-based integration binding: if the role implies certain
+      // providers (e.g. "marketer" → google_ads + facebook_ads + x + …),
+      // auto-bind the agent to the first company-wide account for each
+      // matching provider. Silently skips providers with no account yet.
+      try {
+        const svc = integrationService(db);
+        const providers = defaultProvidersForRole(role);
+        if (providers.length > 0) {
+          const allAccounts = await svc.list(companyId);
+          const seen = new Set<string>();
+          for (const provider of providers) {
+            if (seen.has(provider)) continue;
+            seen.add(provider);
+            const match = allAccounts.find(
+              (a) => a.provider === provider && a.status === "connected",
+            );
+            if (match) {
+              await svc.bindAgent(companyId, created.id, match.id);
+            }
+          }
+        }
+      } catch {
+        // Non-fatal: an auto-binding failure should never block agent
+        // creation. Operator can bind manually in Settings.
+      }
 
       return normalizeAgentRow(created);
     },

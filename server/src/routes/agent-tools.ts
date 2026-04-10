@@ -26,6 +26,11 @@ import { agentPlaybookService, derivePattern } from "../services/agent-playbooks
 import { teamFeedService } from "../services/team-feed.js";
 import { webSearch, formatSearchResultsForPrompt } from "../services/web-search.js";
 import { unauthorized, unprocessable } from "../errors.js";
+import {
+  integrationService,
+  type IntegrationProvider,
+} from "../services/integrations.js";
+import * as drivers from "../services/integration-providers/drivers.js";
 
 // ---------- schemas ----------
 
@@ -992,6 +997,239 @@ export function agentToolRoutes(db: Db) {
             : "Everyone is busy. Consider prioritising with paperclipUpdateIssue or raising a blocker via paperclipAskHuman.",
       }),
     );
+  });
+
+  // ==========================================================
+  // Integration tools (Google Ads, Facebook Ads, X, Reddit,
+  // TikTok Ads, GitHub, WordPress, MakeUGC, SFMC, Firebase)
+  // ==========================================================
+  //
+  // Shared pattern: resolve the calling agent's binding for the given
+  // provider (with company-wide fallback), decrypt the credential
+  // blob, call the provider driver, and return a tool envelope. On
+  // error, mark the account with lastError so the UI shows it.
+
+  const integrationSvc = integrationService(db);
+
+  async function callProvider<Args>(
+    req: Parameters<Parameters<Router["post"]>[1]>[0],
+    res: Parameters<Parameters<Router["post"]>[1]>[1],
+    provider: IntegrationProvider,
+    args: Args,
+    driver: (
+      creds: Record<string, unknown>,
+      meta: Record<string, unknown>,
+      args: Args,
+    ) => Promise<drivers.DriverResult>,
+  ) {
+    const { agentId, companyId } = requireAgentActor(req);
+    const account = await integrationSvc.resolveForAgent(companyId, agentId, provider);
+    if (!account) {
+      res.json(
+        toolResponse.fail({
+          code: "integration_not_connected",
+          message: `No ${provider} integration connected for this company. Ask an operator to connect ${provider} in Settings → Integrations, then bind it to this agent.`,
+        }),
+      );
+      return;
+    }
+    let creds: Record<string, unknown>;
+    try {
+      const resolved = await integrationSvc.resolveCredentials(companyId, account.id);
+      creds = resolved.credentials;
+    } catch (err) {
+      await integrationSvc.markError(
+        companyId,
+        account.id,
+        err instanceof Error ? err.message : "failed to resolve credentials",
+      );
+      res.json(
+        toolResponse.fail({
+          code: "integration_credential_unreadable",
+          message: `Could not read stored credentials for ${provider}. Ask an operator to re-enter the credentials in Settings → Integrations.`,
+        }),
+      );
+      return;
+    }
+    const meta = (account.metadataJson ?? {}) as Record<string, unknown>;
+    const result = await driver(creds, meta, args);
+    if (!result.ok) {
+      await integrationSvc.markError(companyId, account.id, result.error ?? "unknown error");
+      res.json(
+        toolResponse.fail({
+          code: "integration_call_failed",
+          message: `${provider} call failed: ${result.error ?? "unknown error"}. Check credentials and provider status. Re-enter tokens if they expired.`,
+          retry: true,
+        }),
+      );
+      return;
+    }
+    await integrationSvc.markVerified(companyId, account.id);
+    res.json(
+      toolResponse.ok({
+        data: result.data,
+        message: `${provider} call succeeded (account: ${account.label}).`,
+      }),
+    );
+  }
+
+  // ---- Google Ads ----
+  router.post("/agent-tools/google-ads-create-campaign", async (req, res) => {
+    const schema = z.object({
+      name: z.string().min(1).max(200),
+      budgetMicros: z.number().int().positive(),
+      advertisingChannelType: z.string().optional(),
+    });
+    const args = schema.parse(req.body);
+    await callProvider(req, res, "google_ads", args, drivers.googleAdsCreateCampaign);
+  });
+
+  router.post("/agent-tools/google-ads-get-performance", async (req, res) => {
+    const schema = z.object({ days: z.number().int().min(1).max(90).optional() });
+    const args = schema.parse(req.body ?? {});
+    await callProvider(req, res, "google_ads", args, drivers.googleAdsGetPerformance);
+  });
+
+  // ---- Facebook Ads ----
+  router.post("/agent-tools/facebook-ads-create-campaign", async (req, res) => {
+    const schema = z.object({
+      name: z.string().min(1).max(200),
+      objective: z.string().min(1),
+      dailyBudgetCents: z.number().int().positive(),
+    });
+    const args = schema.parse(req.body);
+    await callProvider(req, res, "facebook_ads", args, drivers.facebookAdsCreateCampaign);
+  });
+
+  router.post("/agent-tools/facebook-ads-get-insights", async (req, res) => {
+    const schema = z.object({ datePreset: z.string().optional() });
+    const args = schema.parse(req.body ?? {});
+    await callProvider(req, res, "facebook_ads", args, drivers.facebookAdsGetInsights);
+  });
+
+  // ---- X (Twitter) ----
+  router.post("/agent-tools/x-post", async (req, res) => {
+    const schema = z.object({ text: z.string().min(1).max(280) });
+    const args = schema.parse(req.body);
+    await callProvider(req, res, "x", args, drivers.xPost);
+  });
+
+  router.post("/agent-tools/x-search", async (req, res) => {
+    const schema = z.object({
+      query: z.string().min(1).max(512),
+      maxResults: z.number().int().min(10).max(100).optional(),
+    });
+    const args = schema.parse(req.body);
+    await callProvider(req, res, "x", args, drivers.xSearch);
+  });
+
+  // ---- Reddit ----
+  router.post("/agent-tools/reddit-post", async (req, res) => {
+    const schema = z.object({
+      subreddit: z.string().min(1).max(80),
+      title: z.string().min(1).max(300),
+      text: z.string().max(40000).optional(),
+      url: z.string().url().optional(),
+      kind: z.enum(["self", "link"]).optional(),
+    });
+    const args = schema.parse(req.body);
+    await callProvider(req, res, "reddit", args, drivers.redditPost);
+  });
+
+  // ---- TikTok Ads ----
+  router.post("/agent-tools/tiktok-ads-create-campaign", async (req, res) => {
+    const schema = z.object({
+      name: z.string().min(1).max(200),
+      objective: z.string().min(1),
+      dailyBudgetUsd: z.number().positive(),
+    });
+    const args = schema.parse(req.body);
+    await callProvider(req, res, "tiktok_ads", args, drivers.tiktokAdsCreateCampaign);
+  });
+
+  router.post("/agent-tools/tiktok-ads-get-report", async (req, res) => {
+    const schema = z.object({ days: z.number().int().min(1).max(90).optional() });
+    const args = schema.parse(req.body ?? {});
+    await callProvider(req, res, "tiktok_ads", args, drivers.tiktokAdsGetReport);
+  });
+
+  // ---- GitHub ----
+  router.post("/agent-tools/github-open-pr", async (req, res) => {
+    const schema = z.object({
+      owner: z.string().optional(),
+      repo: z.string().optional(),
+      title: z.string().min(1).max(256),
+      head: z.string().min(1),
+      base: z.string().min(1),
+      body: z.string().max(60000).optional(),
+      draft: z.boolean().optional(),
+    });
+    const args = schema.parse(req.body);
+    await callProvider(req, res, "github", args, drivers.githubOpenPr);
+  });
+
+  router.post("/agent-tools/github-list-issues", async (req, res) => {
+    const schema = z.object({
+      owner: z.string().optional(),
+      repo: z.string().optional(),
+      state: z.enum(["open", "closed", "all"]).optional(),
+      labels: z.string().optional(),
+    });
+    const args = schema.parse(req.body ?? {});
+    await callProvider(req, res, "github", args, drivers.githubListIssues);
+  });
+
+  // ---- WordPress ----
+  router.post("/agent-tools/wordpress-publish", async (req, res) => {
+    const schema = z.object({
+      title: z.string().min(1).max(300),
+      content: z.string().min(1),
+      status: z.enum(["draft", "publish", "pending"]).optional(),
+      categories: z.array(z.number().int()).optional(),
+      tags: z.array(z.number().int()).optional(),
+    });
+    const args = schema.parse(req.body);
+    await callProvider(req, res, "wordpress", args, drivers.wordpressPublish);
+  });
+
+  // ---- MakeUGC ----
+  router.post("/agent-tools/make-ugc-generate", async (req, res) => {
+    const schema = z.object({
+      script: z.string().min(1).max(10000),
+      avatarId: z.string().optional(),
+      voiceId: z.string().optional(),
+    });
+    const args = schema.parse(req.body);
+    await callProvider(req, res, "make_ugc", args, drivers.makeUgcGenerate);
+  });
+
+  // ---- Salesforce Marketing Cloud ----
+  router.post("/agent-tools/sfmc-send-email", async (req, res) => {
+    const schema = z.object({
+      triggeredSendKey: z.string().optional(),
+      toAddress: z.string().email(),
+      subscriberKey: z.string().optional(),
+      attributes: z.record(z.unknown()).optional(),
+    });
+    const args = schema.parse(req.body);
+    await callProvider(req, res, "sfmc", args, drivers.sfmcSendEmail);
+  });
+
+  // ---- Firebase (FCM) ----
+  router.post("/agent-tools/firebase-push", async (req, res) => {
+    const schema = z
+      .object({
+        token: z.string().optional(),
+        topic: z.string().optional(),
+        title: z.string().min(1).max(200),
+        body: z.string().min(1).max(500),
+        data: z.record(z.string()).optional(),
+      })
+      .refine((v) => !!v.token || !!v.topic, {
+        message: "either token or topic is required",
+      });
+    const args = schema.parse(req.body);
+    await callProvider(req, res, "firebase", args, drivers.firebasePush);
   });
 
   return router;

@@ -730,6 +730,57 @@ async function dispatchToolCall(
       if (typeof args.base === "string") body.base = args.base;
       return httpJson("POST", `/api/agent-tools/repo-open-pr`, body);
     }
+    // ========================================================
+    // Integration tool dispatchers — each is a thin passthrough
+    // to the /agent-tools/<provider>-<action> HTTP route. The
+    // route handler resolves the agent's integration binding,
+    // decrypts credentials, and calls the provider driver.
+    // ========================================================
+    case "paperclipGoogleAdsCreateCampaign": {
+      return httpJson("POST", `/api/agent-tools/google-ads-create-campaign`, args);
+    }
+    case "paperclipGoogleAdsGetPerformance": {
+      return httpJson("POST", `/api/agent-tools/google-ads-get-performance`, args);
+    }
+    case "paperclipFacebookAdsCreateCampaign": {
+      return httpJson("POST", `/api/agent-tools/facebook-ads-create-campaign`, args);
+    }
+    case "paperclipFacebookAdsGetInsights": {
+      return httpJson("POST", `/api/agent-tools/facebook-ads-get-insights`, args);
+    }
+    case "paperclipXPost": {
+      return httpJson("POST", `/api/agent-tools/x-post`, args);
+    }
+    case "paperclipXSearch": {
+      return httpJson("POST", `/api/agent-tools/x-search`, args);
+    }
+    case "paperclipRedditPost": {
+      return httpJson("POST", `/api/agent-tools/reddit-post`, args);
+    }
+    case "paperclipTikTokAdsCreateCampaign": {
+      return httpJson("POST", `/api/agent-tools/tiktok-ads-create-campaign`, args);
+    }
+    case "paperclipTikTokAdsGetReport": {
+      return httpJson("POST", `/api/agent-tools/tiktok-ads-get-report`, args);
+    }
+    case "paperclipGithubOpenPr": {
+      return httpJson("POST", `/api/agent-tools/github-open-pr`, args);
+    }
+    case "paperclipGithubListIssues": {
+      return httpJson("POST", `/api/agent-tools/github-list-issues`, args);
+    }
+    case "paperclipWordpressPublish": {
+      return httpJson("POST", `/api/agent-tools/wordpress-publish`, args);
+    }
+    case "paperclipMakeUgcGenerate": {
+      return httpJson("POST", `/api/agent-tools/make-ugc-generate`, args);
+    }
+    case "paperclipSfmcSendEmail": {
+      return httpJson("POST", `/api/agent-tools/sfmc-send-email`, args);
+    }
+    case "paperclipFirebasePush": {
+      return httpJson("POST", `/api/agent-tools/firebase-push`, args);
+    }
     default:
       return { ok: false, result: `Unknown tool: ${name}` };
   }

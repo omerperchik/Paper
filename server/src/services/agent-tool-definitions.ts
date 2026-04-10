@@ -632,6 +632,277 @@ export const DELEGATION_TOOL_DEFINITIONS: DelegationToolDefinition[] = [
       },
     },
   },
+  // ========================================================
+  // Integration tools — only dispatch if the agent's company
+  // has the corresponding provider connected. The route layer
+  // returns a clear "not configured" error if not.
+  // ========================================================
+  {
+    type: "function",
+    function: {
+      name: "paperclipGoogleAdsCreateCampaign",
+      description:
+        "Create a PAUSED Google Ads campaign. Returns the campaign resource name. Starts paused for safety — an operator must enable it. Budget is in micros (USD × 1,000,000).",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Campaign name." },
+          budgetMicros: { type: "number", description: "Daily budget in micros. 10_000_000 = $10." },
+          advertisingChannelType: {
+            type: "string",
+            description: "SEARCH | DISPLAY | SHOPPING | VIDEO | PERFORMANCE_MAX. Defaults to SEARCH.",
+          },
+        },
+        required: ["name", "budgetMicros"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipGoogleAdsGetPerformance",
+      description:
+        "Pull last-N-days performance (impressions, clicks, cost, conversions) for every campaign in the connected Google Ads account.",
+      parameters: {
+        type: "object",
+        properties: {
+          days: { type: "number", description: "7, 14, or 30. Defaults to 7." },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipFacebookAdsCreateCampaign",
+      description:
+        "Create a PAUSED Facebook (Meta) Ads campaign. Objective must be a valid Meta objective like OUTCOME_SALES, OUTCOME_LEADS, OUTCOME_AWARENESS.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          objective: { type: "string", description: "e.g. OUTCOME_SALES, OUTCOME_LEADS, OUTCOME_TRAFFIC." },
+          dailyBudgetCents: { type: "number", description: "Daily budget in cents. 1000 = $10." },
+        },
+        required: ["name", "objective", "dailyBudgetCents"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipFacebookAdsGetInsights",
+      description:
+        "Pull insights (spend, impressions, clicks, ctr, cpc, actions) for every campaign in the connected Meta ad account.",
+      parameters: {
+        type: "object",
+        properties: {
+          datePreset: {
+            type: "string",
+            description: "Meta date preset: last_7d, last_14d, last_30d, this_month, etc. Defaults to last_7d.",
+          },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipXPost",
+      description:
+        "Post a tweet on X (Twitter) from the connected account. Max 280 characters. Use sparingly — every post is public.",
+      parameters: {
+        type: "object",
+        properties: {
+          text: { type: "string", description: "Tweet body, ≤280 chars." },
+        },
+        required: ["text"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipXSearch",
+      description:
+        "Search recent tweets on X. Uses the v2 recent-search endpoint. Good for competitor monitoring and brand mentions.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "X search query. Supports operators like from:, -is:retweet, lang:en." },
+          maxResults: { type: "number", description: "10–100. Defaults to 10." },
+        },
+        required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipRedditPost",
+      description:
+        "Submit a post to a subreddit as the connected account. `kind: self` for text posts (use `text`), `kind: link` for URL posts (use `url`). Respect each subreddit's rules.",
+      parameters: {
+        type: "object",
+        properties: {
+          subreddit: { type: "string", description: "Target subreddit name without the r/ prefix." },
+          title: { type: "string" },
+          text: { type: "string", description: "Body for self-posts." },
+          url: { type: "string", description: "URL for link posts." },
+          kind: { type: "string", enum: ["self", "link"] },
+        },
+        required: ["subreddit", "title"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipTikTokAdsCreateCampaign",
+      description:
+        "Create a DISABLED TikTok Ads campaign on the connected advertiser. Starts disabled — operator must enable.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          objective: {
+            type: "string",
+            description: "TikTok objective_type: TRAFFIC, CONVERSIONS, REACH, VIDEO_VIEWS, etc.",
+          },
+          dailyBudgetUsd: { type: "number", description: "Daily budget in USD." },
+        },
+        required: ["name", "objective", "dailyBudgetUsd"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipTikTokAdsGetReport",
+      description:
+        "Pull a basic performance report (spend, impressions, clicks, ctr, conversion) for the connected TikTok Ads advertiser.",
+      parameters: {
+        type: "object",
+        properties: {
+          days: { type: "number", description: "1–90. Defaults to 7." },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipGithubOpenPr",
+      description:
+        "Open a pull request on GitHub. Requires the `head` branch to already exist on the repo. Use defaults from the integration metadata (defaultOwner/defaultRepo) when owner/repo are omitted.",
+      parameters: {
+        type: "object",
+        properties: {
+          owner: { type: "string", description: "Repo owner. Defaults to integration.defaultOwner." },
+          repo: { type: "string", description: "Repo name. Defaults to integration.defaultRepo." },
+          title: { type: "string" },
+          head: { type: "string", description: "The branch with your changes." },
+          base: { type: "string", description: "The branch you want to merge into (e.g. main)." },
+          body: { type: "string", description: "PR description (markdown)." },
+          draft: { type: "boolean", description: "Open as draft. Defaults to false." },
+        },
+        required: ["title", "head", "base"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipGithubListIssues",
+      description:
+        "List issues on a GitHub repo. Useful for triaging bug reports, finding good first issues, or checking on assigned work.",
+      parameters: {
+        type: "object",
+        properties: {
+          owner: { type: "string" },
+          repo: { type: "string" },
+          state: { type: "string", enum: ["open", "closed", "all"], description: "Defaults to open." },
+          labels: { type: "string", description: "Comma-separated label names to filter by." },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipWordpressPublish",
+      description:
+        "Create a post on the connected WordPress site. Status defaults to `draft` so operators can review before publishing. Set to `publish` only when the content is final.",
+      parameters: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          content: { type: "string", description: "Post body (HTML or Gutenberg blocks)." },
+          status: { type: "string", enum: ["draft", "publish", "pending"] },
+          categories: { type: "array", items: { type: "number" } },
+          tags: { type: "array", items: { type: "number" } },
+        },
+        required: ["title", "content"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipMakeUgcGenerate",
+      description:
+        "Generate a UGC-style AI video from a script using MakeUGC. Returns a job id or video URL depending on the plan. Use for rapid ad-creative iteration.",
+      parameters: {
+        type: "object",
+        properties: {
+          script: { type: "string", description: "Full spoken script. 1–120 seconds is the sweet spot." },
+          avatarId: { type: "string", description: "Overrides the default avatar in metadata." },
+          voiceId: { type: "string" },
+        },
+        required: ["script"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipSfmcSendEmail",
+      description:
+        "Trigger a Salesforce Marketing Cloud transactional email via a Triggered Send definition. The triggered send must already exist in SFMC. Useful for onboarding emails, receipts, and alerts.",
+      parameters: {
+        type: "object",
+        properties: {
+          triggeredSendKey: {
+            type: "string",
+            description: "Triggered send definition key. Defaults to integration.defaultTriggeredSendKey.",
+          },
+          toAddress: { type: "string", description: "Recipient email address." },
+          subscriberKey: { type: "string", description: "Defaults to toAddress." },
+          attributes: { type: "object", description: "Key/value attributes substituted into the email template." },
+        },
+        required: ["toAddress"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipFirebasePush",
+      description:
+        "Send a push notification via Firebase Cloud Messaging. Target either a specific device `token` or a `topic` (pub/sub). Either token OR topic is required.",
+      parameters: {
+        type: "object",
+        properties: {
+          token: { type: "string", description: "FCM device token." },
+          topic: { type: "string", description: "FCM topic name (e.g. 'all-users')." },
+          title: { type: "string" },
+          body: { type: "string" },
+          data: { type: "object", description: "Extra key/value data payload (strings only)." },
+        },
+        required: ["title", "body"],
+      },
+    },
+  },
 ];
 
 /**
