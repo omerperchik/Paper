@@ -525,6 +525,80 @@ async function dispatchToolCall(
   }
 }
 
+// Run a multi-turn tool execution loop against an arbitrary LLM call
+// function. Each iteration: invoke `callFn` with the current message list,
+// check the result for tool_calls, dispatch them, append the assistant + tool
+// messages, and re-invoke. Returns the final CallResult once the LLM stops
+// asking for tools (or when the iteration cap is reached, or when callFn
+// fails). The caller is responsible for converting the CallResult into an
+// AdapterExecutionResult.
+async function runToolLoop(opts: {
+  messages: ChatMessage[];
+  callFn: (messages: ChatMessage[]) => Promise<CallResult>;
+  dispatch: ToolDispatchOptions | null;
+  label: string;
+  onLog: AdapterExecutionContext["onLog"];
+}): Promise<{ finalCall: CallResult | null; totalToolCalls: number }> {
+  let lastCall: CallResult | null = null;
+  let totalToolCalls = 0;
+  for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
+    lastCall = await opts.callFn(opts.messages);
+    await traceLog(opts.onLog, lastCall);
+
+    if (!lastCall.ok || !lastCall.parsed) {
+      return { finalCall: lastCall, totalToolCalls };
+    }
+
+    const toolCalls = lastCall.parsed.toolCalls ?? [];
+    if (toolCalls.length === 0) {
+      return { finalCall: lastCall, totalToolCalls };
+    }
+
+    totalToolCalls += toolCalls.length;
+    await opts.onLog(
+      "stderr",
+      `[gemma-local] Tool loop (${opts.label}) iter=${iter + 1}/${MAX_TOOL_ITERATIONS}: dispatching ${toolCalls.length} tool call(s)\n`,
+    );
+
+    opts.messages.push({
+      role: "assistant",
+      content: lastCall.parsed.content || "",
+      tool_calls: toolCalls.map((tc) => ({
+        id: tc.id,
+        type: "function" as const,
+        function: { name: tc.function.name, arguments: tc.function.arguments },
+      })),
+    });
+
+    for (const tc of toolCalls) {
+      const args = safeParseArgs(tc.function.arguments);
+      let resultText: string;
+      if (!opts.dispatch) {
+        resultText = `Error: tool dispatch unavailable in this run (no apiBase or authToken). Cannot execute ${tc.function.name}.`;
+      } else {
+        const dispatched = await dispatchToolCall(tc.function.name, args, opts.dispatch);
+        resultText = dispatched.result;
+        await opts.onLog(
+          "stderr",
+          `[gemma-local]   tool=${tc.function.name} ok=${dispatched.ok} bytes=${resultText.length}\n`,
+        );
+      }
+      opts.messages.push({
+        role: "tool",
+        tool_call_id: tc.id,
+        name: tc.function.name,
+        content: resultText,
+      });
+    }
+  }
+
+  await opts.onLog(
+    "stderr",
+    `[gemma-local] Tool loop (${opts.label}) hit cap (${MAX_TOOL_ITERATIONS} iterations, ${totalToolCalls} total tool calls).\n`,
+  );
+  return { finalCall: lastCall, totalToolCalls };
+}
+
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
   const { runId, agent, config, context, onLog, onMeta, authToken } = ctx;
 
@@ -693,98 +767,36 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   await onLog("stderr", `[gemma-local] Ollama slot acquired (${ollamaQueue.statusLine()})\n`);
 
   // Pull tool-dispatch context (apiBase, companyId) injected by heartbeat.
-  // If any of these are missing we still run the LLM, but tool calls will be
-  // rejected with a clear error so the model can self-correct.
+  // If any of these are missing we still run the LLM, but tool calls will
+  // surface a clear error so the model can self-correct.
   const apiBase = typeof context.paperclipApiBase === "string" ? context.paperclipApiBase : "";
   const companyId = typeof context.paperclipCompanyId === "string" ? context.paperclipCompanyId : agent.companyId;
   const projectId = typeof context.paperclipProjectId === "string" ? context.paperclipProjectId : null;
+  const dispatch: ToolDispatchOptions | null = apiBase && authToken
+    ? { apiBase, authToken, companyId, agentId: agent.id, projectId }
+    : null;
 
   try {
-    // Multi-turn tool execution loop. Each iteration: call the LLM, check for
-    // tool_calls, execute them, append results, repeat. Stops when the LLM
-    // returns text without tool calls (the "final" answer) or we hit the
-    // iteration cap.
-    let primary: CallResult | null = null;
-    let lastToolCallCount = 0;
-    for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
-      primary = await callOllamaNative({
-        baseUrl: ollamaUrl,
-        model: ollamaModel,
-        messages,
-        tools,
-        timeoutMs: ollamaTimeoutSec * 1000,
-        think: enableThinking,
-        numPredict,
-      });
-      await traceLog(onLog, primary);
+    // Run the tool execution loop against Ollama. The loop drives multi-turn
+    // tool calls (paperclipCreateIssue, etc.) so CEOs can actually delegate.
+    const { finalCall: primary } = await runToolLoop({
+      messages,
+      callFn: (msgs) =>
+        callOllamaNative({
+          baseUrl: ollamaUrl,
+          model: ollamaModel,
+          messages: msgs,
+          tools,
+          timeoutMs: ollamaTimeoutSec * 1000,
+          think: enableThinking,
+          numPredict,
+        }),
+      dispatch,
+      label: "ollama",
+      onLog,
+    });
 
-      if (!primary.ok || !primary.parsed) {
-        break;
-      }
-
-      const toolCalls = primary.parsed.toolCalls ?? [];
-      if (toolCalls.length === 0) {
-        // Final answer.
-        return buildResult(primary, context);
-      }
-
-      lastToolCallCount += toolCalls.length;
-      await onLog(
-        "stderr",
-        `[gemma-local] Tool loop iter=${iter + 1}/${MAX_TOOL_ITERATIONS}: dispatching ${toolCalls.length} tool call(s)\n`,
-      );
-
-      // Append the assistant message that requested the tool calls. We keep
-      // arguments as a JSON string here — the Ollama native API accepts both
-      // string and object form, and our ChatMessage shape uses string.
-      messages.push({
-        role: "assistant",
-        content: primary.parsed.content || "",
-        tool_calls: toolCalls.map((tc) => ({
-          id: tc.id,
-          type: "function" as const,
-          function: { name: tc.function.name, arguments: tc.function.arguments },
-        })),
-      });
-
-      // Execute each tool call against the local API and append results.
-      for (const tc of toolCalls) {
-        const args = safeParseArgs(tc.function.arguments);
-        let resultText: string;
-        if (!apiBase || !authToken) {
-          resultText = `Error: tool dispatch unavailable (apiBase=${apiBase ? "ok" : "missing"}, authToken=${authToken ? "ok" : "missing"}). Cannot execute ${tc.function.name}.`;
-        } else {
-          const dispatched = await dispatchToolCall(tc.function.name, args, {
-            apiBase,
-            authToken,
-            companyId,
-            agentId: agent.id,
-            projectId,
-          });
-          resultText = dispatched.result;
-          await onLog(
-            "stderr",
-            `[gemma-local]   tool=${tc.function.name} ok=${dispatched.ok} bytes=${resultText.length}\n`,
-          );
-        }
-        messages.push({
-          role: "tool",
-          tool_call_id: tc.id,
-          name: tc.function.name,
-          content: resultText,
-        });
-      }
-      // Loop continues — re-call the LLM with the appended tool results.
-    }
-
-    // Loop ended either via iteration cap or via primary failure.
     if (primary && primary.ok && primary.parsed) {
-      // Hit iteration cap with the model still wanting tools — return what
-      // we have so the agent at least sees the tool dispatch trail.
-      await onLog(
-        "stderr",
-        `[gemma-local] Tool loop hit cap (${MAX_TOOL_ITERATIONS} iterations, ${lastToolCallCount} total tool calls). Returning last response.\n`,
-      );
       return buildResult(primary, context);
     }
 
@@ -798,15 +810,15 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       provider: "ollama",
     } as CallResult;
 
-    // Primary failed — attempt fallback. The fallback uses the original
-    // (pre-tool-loop) message list because the fallback path doesn't
-    // currently dispatch tool calls itself.
+    // Primary (Ollama) failed — attempt MiniMax fallback. The fallback path
+    // ALSO runs the tool execution loop so delegation tool calls are
+    // dispatched the same way regardless of which provider answered.
     await onLog(
       "stderr",
       `[gemma-local] Primary (Ollama) failed: ${failure.errorMessage ?? "unknown error"}. Attempting MiniMax fallback.\n`,
     );
 
-    return await executeFallback(fallbackUrl, fallbackModel, fallbackApiKey, messages, tools, fallbackTimeoutSec, numPredict, onLog, context, failure);
+    return await executeFallback(fallbackUrl, fallbackModel, fallbackApiKey, messages, tools, fallbackTimeoutSec, numPredict, onLog, context, failure, dispatch);
   } finally {
     // ALWAYS release the Ollama slot
     ollamaQueue.release();
@@ -829,6 +841,7 @@ async function executeFallback(
   onLog: AdapterExecutionContext["onLog"],
   context: Record<string, unknown>,
   primaryResult?: CallResult,
+  dispatch: ToolDispatchOptions | null = null,
 ): Promise<AdapterExecutionResult> {
   if (!fallbackApiKey) {
     await onLog(
@@ -853,19 +866,29 @@ async function executeFallback(
   let lastError: string | null = null;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    fallback = await callOpenAICompat({
-      baseUrl: fallbackUrl,
-      model: fallbackModel,
-      apiKey: fallbackApiKey,
+    // Run a fresh tool loop against MiniMax. The loop drives any tool calls
+    // the model emits (paperclipCreateIssue, etc.) the same way the Ollama
+    // path does, so delegation works whether or not Ollama is healthy.
+    const loopResult = await runToolLoop({
       messages,
-      tools,
-      timeoutMs: fallbackTimeoutSec * 1000,
-      maxTokens: numPredict,
-      provider: "minimax",
+      callFn: (msgs) =>
+        callOpenAICompat({
+          baseUrl: fallbackUrl,
+          model: fallbackModel,
+          apiKey: fallbackApiKey,
+          messages: msgs,
+          tools,
+          timeoutMs: fallbackTimeoutSec * 1000,
+          maxTokens: numPredict,
+          provider: "minimax",
+        }),
+      dispatch,
+      label: "minimax",
+      onLog,
     });
-    await traceLog(onLog, fallback);
+    fallback = loopResult.finalCall;
 
-    if (fallback.ok && fallback.parsed) {
+    if (fallback && fallback.ok && fallback.parsed) {
       if (attempt > 1) {
         await onLog(
           "stderr",
@@ -875,7 +898,7 @@ async function executeFallback(
       return buildResult(fallback, context);
     }
 
-    lastError = fallback.errorMessage ?? "unknown";
+    lastError = fallback?.errorMessage ?? "unknown";
     const transient = isTransientUpstreamError(lastError);
     if (!transient || attempt === MAX_ATTEMPTS) {
       break;
