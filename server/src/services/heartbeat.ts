@@ -32,6 +32,7 @@ import { companySkillService } from "./company-skills.js";
 import { buildSkillsManifest } from "./agent-skills-manifest.js";
 import { companySkills as companySkillsTable } from "@paperclipai/db";
 import { webSearch, formatSearchResultsForPrompt } from "./web-search.js";
+import { getDelegationToolDefinitions } from "./agent-tool-definitions.js";
 import { budgetService, type BudgetEnforcementScope } from "./budgets.js";
 import { secretService } from "./secrets.js";
 import { resolveDefaultAgentWorkspaceDir, resolveManagedProjectWorkspaceDir } from "../home-paths.js";
@@ -3319,6 +3320,44 @@ export function heartbeatService(db: Db) {
         logger.warn(
           { err, agentId: agent.id },
           "failed to build skills manifest for agent run",
+        );
+      }
+
+      // Inject delegation tool schemas (paperclipListAgents, paperclipCreateIssue,
+      // paperclipAddComment, paperclipUpdateIssue, paperclipListIssues) so the
+      // adapter can advertise them to the LLM. The gemma-local adapter wraps the
+      // LLM call in a multi-turn loop that dispatches these calls back to the
+      // local Paperclip API using the agent's short-lived JWT. Without this
+      // injection, agents (especially CEOs) hallucinate fake [TOOL_CALL] blocks
+      // because they want to delegate but have no real tools.
+      try {
+        const existingTools = Array.isArray(context.tools) ? (context.tools as unknown[]) : [];
+        const delegationTools = getDelegationToolDefinitions();
+        const existingNames = new Set(
+          existingTools
+            .map((t) => {
+              if (typeof t !== "object" || t === null) return null;
+              const fn = (t as Record<string, unknown>).function as Record<string, unknown> | undefined;
+              return typeof fn?.name === "string" ? fn.name : null;
+            })
+            .filter((n): n is string => n !== null),
+        );
+        const merged = [
+          ...existingTools,
+          ...delegationTools.filter((t) => !existingNames.has(t.function.name)),
+        ];
+        context.tools = merged;
+        // Also expose the local API base so the adapter can call back to us.
+        // Use the in-process URL the server published when it started up.
+        const apiBase = process.env.PAPERCLIP_API_URL?.trim();
+        if (apiBase) {
+          context.paperclipApiBase = apiBase;
+        }
+        context.paperclipCompanyId = agent.companyId;
+      } catch (err) {
+        logger.warn(
+          { err, agentId: agent.id },
+          "failed to inject delegation tool definitions",
         );
       }
 

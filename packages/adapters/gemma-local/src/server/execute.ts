@@ -184,9 +184,31 @@ async function callOllamaNative(opts: {
   const base = opts.baseUrl.replace(/\/v1\/?$/, "").replace(/\/+$/, "");
   const url = `${base}/api/chat`;
 
+  // Ollama native API expects assistant tool_calls.function.arguments as an
+  // object, not a JSON string. Convert any string-form arguments before
+  // sending. (Our internal ChatMessage shape uses string for portability.)
+  const ollamaMessages = opts.messages.map((m) => {
+    if (m.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+      return {
+        ...m,
+        tool_calls: m.tool_calls.map((tc) => {
+          let argsObj: unknown = tc.function.arguments;
+          if (typeof argsObj === "string") {
+            try { argsObj = JSON.parse(argsObj); } catch { argsObj = {}; }
+          }
+          return {
+            ...tc,
+            function: { name: tc.function.name, arguments: argsObj },
+          };
+        }),
+      };
+    }
+    return m;
+  });
+
   const body: Record<string, unknown> = {
     model: opts.model,
-    messages: opts.messages,
+    messages: ollamaMessages,
     stream: false,
     think: opts.think,
     options: {
@@ -382,8 +404,129 @@ async function traceLog(
 // Main execute function
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Tool execution: dispatch LLM tool_calls back to the local Paperclip API
+// ---------------------------------------------------------------------------
+//
+// gemma-local agents are real workers, not chatbots — when a CEO decides to
+// delegate, the LLM emits an OpenAI-format tool_call which we execute against
+// the local Paperclip API using the agent's short-lived JWT (passed in via
+// ctx.authToken). Results are appended to the conversation as tool messages
+// and the LLM is invoked again. We cap the loop at MAX_TOOL_ITERATIONS to
+// prevent runaways.
+//
+// Supported tools (defined server-side in agent-tool-definitions.ts):
+//   paperclipListAgents      → GET  /api/companies/{companyId}/agents
+//   paperclipListIssues      → GET  /api/companies/{companyId}/issues
+//   paperclipCreateIssue     → POST /api/companies/{companyId}/issues
+//   paperclipAddComment      → POST /api/issues/{issueId}/comments
+//   paperclipUpdateIssue     → PATCH /api/issues/{issueId}
+// ---------------------------------------------------------------------------
+
+const MAX_TOOL_ITERATIONS = 6;
+
+interface ToolDispatchOptions {
+  apiBase: string;
+  authToken: string;
+  companyId: string;
+  agentId: string;
+  projectId?: string | null;
+}
+
+function safeParseArgs(raw: string): Record<string, unknown> {
+  if (!raw || raw.trim().length === 0) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+async function dispatchToolCall(
+  name: string,
+  args: Record<string, unknown>,
+  opts: ToolDispatchOptions,
+): Promise<{ ok: boolean; result: string }> {
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    authorization: `Bearer ${opts.authToken}`,
+  };
+  const base = opts.apiBase.replace(/\/+$/, "");
+
+  const httpJson = async (method: string, path: string, body?: unknown) => {
+    const response = await fetchWithTimeout(
+      `${base}${path}`,
+      {
+        method,
+        headers,
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      },
+      20_000,
+    );
+    const text = await response.text();
+    if (!response.ok) {
+      return { ok: false, result: `HTTP ${response.status}: ${text.slice(0, 500)}` };
+    }
+    return { ok: true, result: text.length > 4000 ? `${text.slice(0, 4000)}…[truncated]` : text };
+  };
+
+  switch (name) {
+    case "paperclipListAgents": {
+      return httpJson("GET", `/api/companies/${opts.companyId}/agents`);
+    }
+    case "paperclipListIssues": {
+      const params = new URLSearchParams();
+      if (typeof args.assigneeAgentId === "string") params.set("assigneeAgentId", args.assigneeAgentId);
+      if (typeof args.status === "string") params.set("status", args.status);
+      const limit = typeof args.limit === "number" ? args.limit : 25;
+      params.set("limit", String(limit));
+      const qs = params.toString();
+      return httpJson("GET", `/api/companies/${opts.companyId}/issues${qs ? `?${qs}` : ""}`);
+    }
+    case "paperclipCreateIssue": {
+      const body: Record<string, unknown> = {
+        title: typeof args.title === "string" ? args.title : "(untitled)",
+      };
+      if (typeof args.description === "string") body.description = args.description;
+      if (typeof args.assigneeAgentId === "string") body.assigneeAgentId = args.assigneeAgentId;
+      if (typeof args.priority === "string") body.priority = args.priority;
+      body.status = typeof args.status === "string" ? args.status : "todo";
+      if (typeof args.projectId === "string") {
+        body.projectId = args.projectId;
+      } else if (opts.projectId) {
+        body.projectId = opts.projectId;
+      }
+      return httpJson("POST", `/api/companies/${opts.companyId}/issues`, body);
+    }
+    case "paperclipAddComment": {
+      const issueId = typeof args.issueId === "string" ? args.issueId : "";
+      if (!issueId) return { ok: false, result: "issueId is required" };
+      return httpJson("POST", `/api/issues/${encodeURIComponent(issueId)}/comments`, {
+        body: typeof args.body === "string" ? args.body : "",
+      });
+    }
+    case "paperclipUpdateIssue": {
+      const issueId = typeof args.issueId === "string" ? args.issueId : "";
+      if (!issueId) return { ok: false, result: "issueId is required" };
+      const body: Record<string, unknown> = {};
+      if (typeof args.status === "string") body.status = args.status;
+      if (typeof args.priority === "string") body.priority = args.priority;
+      if (typeof args.assigneeAgentId === "string" || args.assigneeAgentId === null) {
+        body.assigneeAgentId = args.assigneeAgentId;
+      }
+      if (typeof args.title === "string") body.title = args.title;
+      return httpJson("PATCH", `/api/issues/${encodeURIComponent(issueId)}`, body);
+    }
+    default:
+      return { ok: false, result: `Unknown tool: ${name}` };
+  }
+}
+
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
-  const { runId, agent, config, context, onLog, onMeta } = ctx;
+  const { runId, agent, config, context, onLog, onMeta, authToken } = ctx;
 
   // Read configuration
   const ollamaUrl = asString(config.ollamaUrl, DEFAULT_OLLAMA_URL);
@@ -549,31 +692,121 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   // slotResult === "acquired" — we have an Ollama slot
   await onLog("stderr", `[gemma-local] Ollama slot acquired (${ollamaQueue.statusLine()})\n`);
 
-  try {
-    // Attempt primary (Ollama native API with think control)
-    const primary = await callOllamaNative({
-      baseUrl: ollamaUrl,
-      model: ollamaModel,
-      messages,
-      tools,
-      timeoutMs: ollamaTimeoutSec * 1000,
-      think: enableThinking,
-      numPredict,
-    });
-    await traceLog(onLog, primary);
+  // Pull tool-dispatch context (apiBase, companyId) injected by heartbeat.
+  // If any of these are missing we still run the LLM, but tool calls will be
+  // rejected with a clear error so the model can self-correct.
+  const apiBase = typeof context.paperclipApiBase === "string" ? context.paperclipApiBase : "";
+  const companyId = typeof context.paperclipCompanyId === "string" ? context.paperclipCompanyId : agent.companyId;
+  const projectId = typeof context.paperclipProjectId === "string" ? context.paperclipProjectId : null;
 
-    // If primary succeeded, return result
-    if (primary.ok && primary.parsed) {
+  try {
+    // Multi-turn tool execution loop. Each iteration: call the LLM, check for
+    // tool_calls, execute them, append results, repeat. Stops when the LLM
+    // returns text without tool calls (the "final" answer) or we hit the
+    // iteration cap.
+    let primary: CallResult | null = null;
+    let lastToolCallCount = 0;
+    for (let iter = 0; iter < MAX_TOOL_ITERATIONS; iter++) {
+      primary = await callOllamaNative({
+        baseUrl: ollamaUrl,
+        model: ollamaModel,
+        messages,
+        tools,
+        timeoutMs: ollamaTimeoutSec * 1000,
+        think: enableThinking,
+        numPredict,
+      });
+      await traceLog(onLog, primary);
+
+      if (!primary.ok || !primary.parsed) {
+        break;
+      }
+
+      const toolCalls = primary.parsed.toolCalls ?? [];
+      if (toolCalls.length === 0) {
+        // Final answer.
+        return buildResult(primary, context);
+      }
+
+      lastToolCallCount += toolCalls.length;
+      await onLog(
+        "stderr",
+        `[gemma-local] Tool loop iter=${iter + 1}/${MAX_TOOL_ITERATIONS}: dispatching ${toolCalls.length} tool call(s)\n`,
+      );
+
+      // Append the assistant message that requested the tool calls. We keep
+      // arguments as a JSON string here — the Ollama native API accepts both
+      // string and object form, and our ChatMessage shape uses string.
+      messages.push({
+        role: "assistant",
+        content: primary.parsed.content || "",
+        tool_calls: toolCalls.map((tc) => ({
+          id: tc.id,
+          type: "function" as const,
+          function: { name: tc.function.name, arguments: tc.function.arguments },
+        })),
+      });
+
+      // Execute each tool call against the local API and append results.
+      for (const tc of toolCalls) {
+        const args = safeParseArgs(tc.function.arguments);
+        let resultText: string;
+        if (!apiBase || !authToken) {
+          resultText = `Error: tool dispatch unavailable (apiBase=${apiBase ? "ok" : "missing"}, authToken=${authToken ? "ok" : "missing"}). Cannot execute ${tc.function.name}.`;
+        } else {
+          const dispatched = await dispatchToolCall(tc.function.name, args, {
+            apiBase,
+            authToken,
+            companyId,
+            agentId: agent.id,
+            projectId,
+          });
+          resultText = dispatched.result;
+          await onLog(
+            "stderr",
+            `[gemma-local]   tool=${tc.function.name} ok=${dispatched.ok} bytes=${resultText.length}\n`,
+          );
+        }
+        messages.push({
+          role: "tool",
+          tool_call_id: tc.id,
+          name: tc.function.name,
+          content: resultText,
+        });
+      }
+      // Loop continues — re-call the LLM with the appended tool results.
+    }
+
+    // Loop ended either via iteration cap or via primary failure.
+    if (primary && primary.ok && primary.parsed) {
+      // Hit iteration cap with the model still wanting tools — return what
+      // we have so the agent at least sees the tool dispatch trail.
+      await onLog(
+        "stderr",
+        `[gemma-local] Tool loop hit cap (${MAX_TOOL_ITERATIONS} iterations, ${lastToolCallCount} total tool calls). Returning last response.\n`,
+      );
       return buildResult(primary, context);
     }
 
-    // Primary failed — attempt fallback
+    const failure = primary ?? {
+      ok: false,
+      parsed: null,
+      errorMessage: "no LLM call attempted",
+      latencyMs: 0,
+      wasFallback: false,
+      model: ollamaModel,
+      provider: "ollama",
+    } as CallResult;
+
+    // Primary failed — attempt fallback. The fallback uses the original
+    // (pre-tool-loop) message list because the fallback path doesn't
+    // currently dispatch tool calls itself.
     await onLog(
       "stderr",
-      `[gemma-local] Primary (Ollama) failed: ${primary.errorMessage ?? "unknown error"}. Attempting MiniMax fallback.\n`,
+      `[gemma-local] Primary (Ollama) failed: ${failure.errorMessage ?? "unknown error"}. Attempting MiniMax fallback.\n`,
     );
 
-    return await executeFallback(fallbackUrl, fallbackModel, fallbackApiKey, messages, tools, fallbackTimeoutSec, numPredict, onLog, context, primary);
+    return await executeFallback(fallbackUrl, fallbackModel, fallbackApiKey, messages, tools, fallbackTimeoutSec, numPredict, onLog, context, failure);
   } finally {
     // ALWAYS release the Ollama slot
     ollamaQueue.release();

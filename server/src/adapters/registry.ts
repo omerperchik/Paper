@@ -206,7 +206,10 @@ const gemmaLocalAdapter: ServerAdapterModule = {
   execute: gemmaExecute,
   testEnvironment: gemmaTestEnvironment,
   models: gemmaModels,
-  supportsLocalAgentJwt: false,
+  // gemma_local now uses the JWT to dispatch tool calls (paperclipCreateIssue,
+  // paperclipAddComment, etc.) back to the local Paperclip API from inside the
+  // multi-turn tool execution loop in the adapter.
+  supportsLocalAgentJwt: true,
   agentConfigurationDoc: gemmaAgentConfigurationDoc,
 };
 
