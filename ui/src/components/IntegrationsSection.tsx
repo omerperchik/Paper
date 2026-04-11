@@ -129,11 +129,7 @@ export function IntegrationsSection({ companyId }: Props) {
   const pendingRequests: IntegrationRequestDto[] = requestsQuery.data ?? [];
 
   return (
-    <div className="space-y-4" data-testid="company-settings-integrations-section">
-      <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-        Integrations
-      </div>
-
+    <div className="space-y-4" data-testid="integrations-section">
       {pendingRequests.length > 0 ? (
         <div
           className="rounded-md border border-amber-500/40 bg-amber-500/5 px-4 py-3 space-y-2"

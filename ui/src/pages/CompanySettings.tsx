@@ -17,7 +17,6 @@ import {
   ToggleField,
   HintIcon
 } from "../components/agent-config-primitives";
-import { IntegrationsSection } from "../components/IntegrationsSection";
 
 type AgentSnippetInput = {
   onboardingTextUrl: string;
@@ -401,9 +400,6 @@ export function CompanySettings() {
           )}
         </div>
       )}
-
-      {/* Integrations */}
-      <IntegrationsSection companyId={selectedCompanyId!} />
 
       {/* Hiring */}
       <div className="space-y-4" data-testid="company-settings-team-section">
