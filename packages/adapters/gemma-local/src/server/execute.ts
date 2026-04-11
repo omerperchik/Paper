@@ -1162,33 +1162,6 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   await onLog("stderr", `[gemma-local] Primary: ${ollamaUrl} model=${ollamaModel} think=${enableThinking}\n`);
   await onLog("stderr", `[gemma-local] Queue: ${ollamaQueue.statusLine()}\n`);
 
-  // ---------------------------------------------------------------------------
-  // Acquire Ollama slot via the shared queue
-  // ---------------------------------------------------------------------------
-  const slotResult = await ollamaQueue.acquire();
-
-  if (slotResult === "overflow") {
-    // Queue is full — skip Ollama entirely, go straight to MiniMax
-    await onLog(
-      "stderr",
-      `[gemma-local] Ollama queue full (${ollamaQueue.statusLine()}). Routing directly to MiniMax.\n`,
-    );
-    return await executeFallback(fallbackUrl, fallbackModel, fallbackApiKey, messages, tools, fallbackTimeoutSec, numPredict, onLog, context);
-  }
-
-  if (slotResult === "timeout") {
-    // Waited too long in queue — go to MiniMax
-    const effectiveTimeoutMs = queueTimeoutMs ?? 180_000;
-    await onLog(
-      "stderr",
-      `[gemma-local] Ollama queue wait timed out after ${Math.round(effectiveTimeoutMs / 1000)}s. Routing to MiniMax.\n`,
-    );
-    return await executeFallback(fallbackUrl, fallbackModel, fallbackApiKey, messages, tools, fallbackTimeoutSec, numPredict, onLog, context);
-  }
-
-  // slotResult === "acquired" — we have an Ollama slot
-  await onLog("stderr", `[gemma-local] Ollama slot acquired (${ollamaQueue.statusLine()})\n`);
-
   // Pull tool-dispatch context (apiBase, companyId) injected by heartbeat.
   // If any of these are missing we still run the LLM, but tool calls will
   // surface a clear error so the model can self-correct.
@@ -1199,54 +1172,92 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     ? { apiBase, authToken, companyId, agentId: agent.id, runId, projectId }
     : null;
 
-  try {
-    // Run the tool execution loop against Ollama. The loop drives multi-turn
-    // tool calls (paperclipCreateIssue, etc.) so CEOs can actually delegate.
-    const { finalCall: primary } = await runToolLoop({
-      messages,
-      callFn: (msgs) =>
-        callOllamaNative({
-          baseUrl: ollamaUrl,
-          model: ollamaModel,
-          messages: msgs,
-          tools,
-          timeoutMs: ollamaTimeoutSec * 1000,
-          think: enableThinking,
-          numPredict,
-        }),
-      dispatch,
-      label: "ollama",
-      onLog,
-    });
-
-    if (primary && primary.ok && primary.parsed) {
-      return buildResult(primary, context);
+  // ---------------------------------------------------------------------------
+  // Per-call Ollama slot acquisition.
+  //
+  // IMPORTANT: we acquire+release the Ollama slot around EACH LLM call, not
+  // around the whole tool loop. A single run can last many minutes doing
+  // repeated LLM<->tool turns — holding one slot for the entire run means
+  // with maxConcurrent=2 only two runs make progress while everyone else
+  // starves and eventually times out with "queue overflow". Releasing the
+  // slot between LLM calls lets other runs interleave while this agent is
+  // dispatching local tool calls (which don't touch Ollama).
+  //
+  // If acquire fails (overflow/timeout), we return a failure CallResult;
+  // runToolLoop treats it as "call_failed", exits the loop, and the outer
+  // code routes to the MiniMax fallback with the slot-failure reason.
+  // ---------------------------------------------------------------------------
+  let queueFailureReason: string | null = null;
+  const ollamaCallFn = async (msgs: ChatMessage[]): Promise<CallResult> => {
+    const slotResult = await ollamaQueue.acquire();
+    if (slotResult !== "acquired") {
+      const effectiveTimeoutMs = queueTimeoutMs ?? 180_000;
+      queueFailureReason =
+        slotResult === "overflow"
+          ? "queue full"
+          : `queue wait timed out after ${Math.round(effectiveTimeoutMs / 1000)}s`;
+      await onLog(
+        "stderr",
+        `[gemma-local] Ollama slot not available (${slotResult}) — ${ollamaQueue.statusLine()}\n`,
+      );
+      return {
+        ok: false,
+        parsed: null,
+        errorMessage: queueFailureReason,
+        latencyMs: 0,
+        wasFallback: false,
+        model: ollamaModel,
+        provider: "ollama",
+      };
     }
+    try {
+      return await callOllamaNative({
+        baseUrl: ollamaUrl,
+        model: ollamaModel,
+        messages: msgs,
+        tools,
+        timeoutMs: ollamaTimeoutSec * 1000,
+        think: enableThinking,
+        numPredict,
+      });
+    } finally {
+      ollamaQueue.release();
+    }
+  };
 
-    const failure = primary ?? {
-      ok: false,
-      parsed: null,
-      errorMessage: "no LLM call attempted",
-      latencyMs: 0,
-      wasFallback: false,
-      model: ollamaModel,
-      provider: "ollama",
-    } as CallResult;
+  // Run the tool execution loop against Ollama. The loop drives multi-turn
+  // tool calls (paperclipCreateIssue, etc.) so CEOs can actually delegate.
+  const { finalCall: primary } = await runToolLoop({
+    messages,
+    callFn: ollamaCallFn,
+    dispatch,
+    label: "ollama",
+    onLog,
+  });
 
-    // Primary (Ollama) failed — attempt MiniMax fallback. The fallback path
-    // ALSO runs the tool execution loop so delegation tool calls are
-    // dispatched the same way regardless of which provider answered.
-    await onLog(
-      "stderr",
-      `[gemma-local] Primary (Ollama) failed: ${failure.errorMessage ?? "unknown error"}. Attempting MiniMax fallback.\n`,
-    );
-
-    return await executeFallback(fallbackUrl, fallbackModel, fallbackApiKey, messages, tools, fallbackTimeoutSec, numPredict, onLog, context, failure, dispatch);
-  } finally {
-    // ALWAYS release the Ollama slot
-    ollamaQueue.release();
-    await onLog("stderr", `[gemma-local] Ollama slot released (${ollamaQueue.statusLine()})\n`);
+  if (primary && primary.ok && primary.parsed) {
+    return buildResult(primary, context);
   }
+
+  const failure = primary ?? {
+    ok: false,
+    parsed: null,
+    errorMessage: queueFailureReason ?? "no LLM call attempted",
+    latencyMs: 0,
+    wasFallback: false,
+    model: ollamaModel,
+    provider: "ollama",
+  } as CallResult;
+
+  // Primary (Ollama) failed — attempt MiniMax fallback. The fallback path
+  // ALSO runs the tool execution loop so delegation tool calls are
+  // dispatched the same way regardless of which provider answered.
+  await onLog(
+    "stderr",
+    `[gemma-local] Primary (Ollama) failed: ${failure.errorMessage ?? "unknown error"}. Attempting MiniMax fallback.\n`,
+  );
+
+  return await executeFallback(fallbackUrl, fallbackModel, fallbackApiKey, messages, tools, fallbackTimeoutSec, numPredict, onLog, context, failure, dispatch);
 }
 
 // ---------------------------------------------------------------------------
