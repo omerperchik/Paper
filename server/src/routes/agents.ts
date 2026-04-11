@@ -2219,6 +2219,94 @@ export function agentRoutes(db: Db) {
     res.json(runs);
   });
 
+  // Retry all failed heartbeat runs in a time window, staggered across a
+  // window so we don't hammer the Ollama queue with a thundering herd.
+  // Body: { sinceHours?: number (default 72, max 720), staggerMs?: number (default 2000, min 250) }
+  router.post("/companies/:companyId/heartbeats/retry-failures", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+
+    const sinceHoursRaw = Number(req.body?.sinceHours);
+    const sinceHours = Number.isFinite(sinceHoursRaw)
+      ? Math.max(1, Math.min(24 * 30, sinceHoursRaw))
+      : 72;
+    const staggerMsRaw = Number(req.body?.staggerMs);
+    const staggerMs = Number.isFinite(staggerMsRaw)
+      ? Math.max(250, Math.min(60_000, staggerMsRaw))
+      : 2_000;
+
+    const since = new Date(Date.now() - sinceHours * 60 * 60 * 1000);
+
+    // Find distinct agents that had failed/timed_out runs in the window and
+    // are still active (not paused/terminated).
+    const rows = await db
+      .selectDistinct({ agentId: heartbeatRuns.agentId })
+      .from(heartbeatRuns)
+      .innerJoin(agentsTable, eq(heartbeatRuns.agentId, agentsTable.id))
+      .where(
+        and(
+          eq(heartbeatRuns.companyId, companyId),
+          gte(heartbeatRuns.createdAt, since),
+          inArray(heartbeatRuns.status, ["failed", "timed_out"]),
+          not(inArray(agentsTable.status, ["paused", "terminated", "pending_approval"])),
+        ),
+      );
+
+    const agentIds = rows.map((r) => r.agentId).filter((id): id is string => !!id);
+    const actor = getActorInfo(req);
+
+    // Schedule staggered wakeups. We fire-and-forget setTimeouts; the endpoint
+    // returns immediately with the schedule. Each wakeup hits enqueueWakeup
+    // which is idempotent-ish (respects queue/overflow), so even if a prior
+    // run is still in-flight the call will be skipped cleanly.
+    agentIds.forEach((agentId, idx) => {
+      const delay = idx * staggerMs;
+      setTimeout(async () => {
+        try {
+          const run = await heartbeat.wakeup(agentId, {
+            source: "on_demand",
+            triggerDetail: "manual",
+            reason: "retry_failed_heartbeats",
+            requestedByActorType: actor.actorType === "agent" ? "user" : actor.actorType,
+            requestedByActorId: actor.actorId ?? null,
+            contextSnapshot: {
+              source: "retry_failures",
+              sinceHours,
+              scheduledIndex: idx,
+            },
+          });
+          if (run) {
+            await logActivity(db, {
+              companyId,
+              actorType: actor.actorType,
+              actorId: actor.actorId,
+              agentId,
+              runId: actor.runId,
+              action: "heartbeat.invoked",
+              entityType: "heartbeat_run",
+              entityId: run.id,
+              details: { reason: "retry_failed_heartbeats", staggerIndex: idx },
+            });
+          }
+        } catch (err) {
+          // Swallow — one bad agent shouldn't kill the batch.
+          console.warn(
+            `[retry-failures] wakeup failed for agent=${agentId} idx=${idx}:`,
+            err instanceof Error ? err.message : err,
+          );
+        }
+      }, delay);
+    });
+
+    res.status(202).json({
+      agentCount: agentIds.length,
+      agentIds,
+      staggerMs,
+      sinceHours,
+      totalWindowMs: Math.max(0, (agentIds.length - 1) * staggerMs),
+    });
+  });
+
   router.get("/companies/:companyId/failure-classes", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
