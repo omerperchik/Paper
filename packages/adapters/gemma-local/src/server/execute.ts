@@ -991,7 +991,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const fallbackUrl = asString(config.fallbackUrl, DEFAULT_FALLBACK_URL);
   const fallbackModel = asString(config.fallbackModel, DEFAULT_FALLBACK_MODEL);
   const fallbackApiKey = asString(config.fallbackApiKey, "");
-  const ollamaTimeoutSec = asNumber(config.timeoutSec, 600);
+  const ollamaTimeoutSec = asNumber(config.timeoutSec, 1800);
   const fallbackTimeoutSec = asNumber(config.fallbackTimeoutSec, 120);
   const baseSystemPrompt = asString(config.systemPrompt, "");
   const enableThinking = asBool(config.enableThinking, false);
