@@ -16,7 +16,7 @@ import { StatusIcon } from "../components/StatusIcon";
 import { Identity } from "../components/Identity";
 import { timeAgo } from "../lib/timeAgo";
 import { formatCents } from "../lib/utils";
-import { Bot, CircleDot, DollarSign, ShieldCheck, LayoutDashboard, PauseCircle, Receipt } from "lucide-react";
+import { Bot, CircleDot, DollarSign, ShieldCheck, LayoutDashboard, PauseCircle, Receipt, Cpu } from "lucide-react";
 import { LiveFeed } from "../components/LiveFeed";
 import { ChartCard, RunActivityChart, PriorityChart, IssueStatusChart, SuccessRateChart } from "../components/ActivityCharts";
 import { FailureClassesPanel } from "../components/FailureClassesPanel";
@@ -147,6 +147,24 @@ export function Dashboard() {
               : "awaiting your input",
           to: "/approvals",
           tone: data.pendingApprovals + data.budgets.pendingApprovals > 0 ? "warn" : "default",
+        },
+        {
+          icon: Cpu,
+          value:
+            data.modelUsage.primaryCalls + data.modelUsage.secondaryCalls > 0
+              ? `${data.modelUsage.primaryPercent}%`
+              : "—",
+          label: "Primary model",
+          hint:
+            data.modelUsage.primaryCalls + data.modelUsage.secondaryCalls > 0
+              ? `${data.modelUsage.primaryCalls} primary · ${data.modelUsage.secondaryCalls} secondary (${data.modelUsage.secondaryPercent}%)`
+              : "no LLM calls yet this month",
+          to: "/costs",
+          tone:
+            data.modelUsage.primaryCalls + data.modelUsage.secondaryCalls > 0 &&
+            data.modelUsage.secondaryPercent >= 50
+              ? "warn"
+              : "default",
         },
       ]
     : [];

@@ -76,6 +76,50 @@ export function dashboardService(db: Db) {
         );
 
       const monthSpendCents = Number(monthSpend);
+
+      // Primary vs secondary model breakdown.
+      //
+      // "Primary" = the cost_event's model matches the agent's currently
+      // configured runtime_config.model. "Secondary" = anything else the
+      // adapter actually invoked (fallback tier, router downgrade, manual
+      // override, retry on a cheaper model, etc.). Reported over the current
+      // calendar month so it lines up with month spend.
+      const modelRows = await db.execute<{
+        bucket: string;
+        call_count: number;
+        spend_cents: number;
+      }>(sql`
+        select
+          case
+            when ${costEvents.model} = (${agents.runtimeConfig} ->> 'model')
+              then 'primary'
+            else 'secondary'
+          end as bucket,
+          count(*)::int as call_count,
+          coalesce(sum(${costEvents.costCents}), 0)::int as spend_cents
+        from ${costEvents}
+        join ${agents} on ${agents.id} = ${costEvents.agentId}
+        where ${costEvents.companyId} = ${companyId}
+          and ${costEvents.occurredAt} >= ${monthStart}
+        group by bucket
+      `);
+      let primaryCalls = 0;
+      let secondaryCalls = 0;
+      let primarySpendCents = 0;
+      let secondarySpendCents = 0;
+      for (const row of (modelRows as { rows?: Array<{ bucket: string; call_count: number; spend_cents: number }> }).rows ?? []) {
+        if (row.bucket === "primary") {
+          primaryCalls = Number(row.call_count) || 0;
+          primarySpendCents = Number(row.spend_cents) || 0;
+        } else if (row.bucket === "secondary") {
+          secondaryCalls = Number(row.call_count) || 0;
+          secondarySpendCents = Number(row.spend_cents) || 0;
+        }
+      }
+      const totalCalls = primaryCalls + secondaryCalls;
+      const primaryPercent = totalCalls > 0 ? Number(((primaryCalls / totalCalls) * 100).toFixed(1)) : 0;
+      const secondaryPercent = totalCalls > 0 ? Number(((secondaryCalls / totalCalls) * 100).toFixed(1)) : 0;
+
       const utilization =
         company.budgetMonthlyCents > 0
           ? (monthSpendCents / company.budgetMonthlyCents) * 100
@@ -102,6 +146,14 @@ export function dashboardService(db: Db) {
           pendingApprovals: budgetOverview.pendingApprovalCount,
           pausedAgents: budgetOverview.pausedAgentCount,
           pausedProjects: budgetOverview.pausedProjectCount,
+        },
+        modelUsage: {
+          primaryCalls,
+          secondaryCalls,
+          primaryPercent,
+          secondaryPercent,
+          primarySpendCents,
+          secondarySpendCents,
         },
       };
     },

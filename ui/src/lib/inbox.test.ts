@@ -268,6 +268,14 @@ const dashboard: DashboardSummary = {
     pausedAgents: 0,
     pausedProjects: 0,
   },
+  modelUsage: {
+    primaryCalls: 0,
+    secondaryCalls: 0,
+    primaryPercent: 0,
+    secondaryPercent: 0,
+    primarySpendCents: 0,
+    secondarySpendCents: 0,
+  },
 };
 
 describe("inbox helpers", () => {
