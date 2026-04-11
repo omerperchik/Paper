@@ -29,6 +29,18 @@ export const agentWorkingMemory = pgTable(
     openThreads: jsonb("open_threads").$type<OpenThread[]>().notNull().default([]),
     recentDecisions: jsonb("recent_decisions").$type<RecentDecision[]>().notNull().default([]),
     expectedResponses: jsonb("expected_responses").$type<ExpectedResponse[]>().notNull().default([]),
+    /**
+     * Compiled best-current-understanding. The agent rewrites this whenever
+     * its mental model of the current focus changes. It's the "answer" — a
+     * mutable, terse paragraph the next heartbeat reads first.
+     */
+    compiled: text("compiled").notNull().default(""),
+    /**
+     * Append-only evidence timeline. Each entry is a small object with at
+     * minimum {at, kind, text}. Bounded at MAX_TIMELINE entries by the
+     * service layer; older entries are dropped on append.
+     */
+    timeline: jsonb("timeline").$type<MemoryTimelineEntry[]>().notNull().default([]),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -55,4 +67,11 @@ export interface ExpectedResponse {
   question: string;
   waitingOn: string;
   askedAt?: string;
+}
+
+export interface MemoryTimelineEntry {
+  at: string;
+  kind: "observation" | "decision" | "result" | "blocker" | "note";
+  text: string;
+  runId?: string;
 }

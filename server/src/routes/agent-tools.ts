@@ -80,11 +80,19 @@ const expectedResponseSchema = z.object({
   waitingOn: z.string().min(1).max(200),
   askedAt: z.string().max(64).optional(),
 });
+const memoryTimelineEntrySchema = z.object({
+  at: z.string().max(64).optional(),
+  kind: z.enum(["observation", "decision", "result", "blocker", "note"]),
+  text: z.string().min(1).max(800),
+  runId: z.string().uuid().optional(),
+});
 const workingMemoryWriteSchema = z.object({
   currentFocus: z.string().max(400).optional(),
   openThreads: z.array(openThreadSchema).max(10).optional(),
   recentDecisions: z.array(recentDecisionSchema).max(10).optional(),
   expectedResponses: z.array(expectedResponseSchema).max(10).optional(),
+  compiled: z.string().max(4000).optional(),
+  appendTimeline: z.array(memoryTimelineEntrySchema).max(20).optional(),
 });
 
 const companyStateWriteSchema = z.object({
@@ -436,15 +444,19 @@ export function agentToolRoutes(db: Db) {
       toolResponse.ok({
         data: {
           currentFocus: row.currentFocus,
+          compiled: row.compiled,
           openThreads: row.openThreads,
           recentDecisions: row.recentDecisions,
           expectedResponses: row.expectedResponses,
+          timeline: row.timeline.slice(-20),
           updatedAt: row.updatedAt.toISOString(),
         },
         nextHint:
           row.expectedResponses.length > 0
             ? "You have pending questions awaiting answers — check paperclipAnsweredHumanQuestions in your context before asking again."
-            : "Resume work on the top openThread, or refine currentFocus if priorities shifted.",
+            : row.compiled
+              ? "Read your compiled summary first — it's your best-current-understanding. Append new evidence with appendTimeline as you work."
+              : "Resume work on the top openThread, or refine currentFocus if priorities shifted. Write a `compiled` summary so future heartbeats start with the answer, not raw evidence.",
       }),
     );
   });
@@ -454,7 +466,16 @@ export function agentToolRoutes(db: Db) {
     validate(workingMemoryWriteSchema),
     async (req, res) => {
       const { agentId, companyId } = requireAgentActor(req);
-      const patch = req.body as z.infer<typeof workingMemoryWriteSchema>;
+      const raw = req.body as z.infer<typeof workingMemoryWriteSchema>;
+      // Default `at` to now for any timeline entries that arrived without one.
+      const nowIso = new Date().toISOString();
+      const patch = {
+        ...raw,
+        appendTimeline: raw.appendTimeline?.map((e) => ({
+          ...e,
+          at: e.at ?? nowIso,
+        })),
+      };
       const row = await workingMemory.upsert({ companyId, agentId, patch });
       res.json(
         toolResponse.ok({
@@ -1433,6 +1454,48 @@ export function agentToolRoutes(db: Db) {
     });
     const args = schema.parse(req.body);
     await callProvider(req, res, "firebase", args, drivers.firebaseSubscribeToTopic);
+  });
+
+  // ---------- weekly retro (chairman/CEO) ----------
+
+  router.post("/agent-tools/run-retro", async (req, res) => {
+    const { agentId, companyId } = requireAgentActor(req);
+    // Permission gate: only CEO/founder/chairman roles can fire a retro.
+    const actorRow = await db
+      .select({ role: agentsTable.role })
+      .from(agentsTable)
+      .where(eq(agentsTable.id, agentId))
+      .limit(1)
+      .then((r) => r[0] ?? null);
+    const role = (actorRow?.role ?? "").toLowerCase();
+    if (!/(ceo|chairman|founder)/.test(role)) {
+      res.json(
+        toolResponse.fail({
+          code: "forbidden",
+          message: "Only CEO/founder/chairman roles can run a retro.",
+        }),
+      );
+      return;
+    }
+    try {
+      const { retroService } = await import("../services/retro.js");
+      const summary = await retroService(db).runRetroForCompany(companyId);
+      res.json(
+        toolResponse.ok({
+          data: summary,
+          message: `Retro complete: ${summary.playbooksTouched} playbook(s), ${summary.rewroteInsightsFor.length} insight(s) refreshed, ${summary.totalActivity} activity event(s) in the last ${summary.windowDays} days.`,
+          nextHint:
+            "Review the topPatterns and rewroteInsightsFor; consider updating company strategy via paperclipUpdateCompanyState if any patterns suggest a pivot.",
+        }),
+      );
+    } catch (err) {
+      res.json(
+        toolResponse.fail({
+          code: "retro_failed",
+          message: err instanceof Error ? err.message : String(err),
+        }),
+      );
+    }
   });
 
   return router;

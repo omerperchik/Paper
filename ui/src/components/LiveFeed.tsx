@@ -14,7 +14,11 @@ import {
   XCircle,
 } from "lucide-react";
 import { heartbeatsApi, type LiveRunForIssue } from "../api/heartbeats";
-import { activityApi } from "../api/activity";
+import {
+  activityApi,
+  type ActivityEntity,
+  type ActivityEntityBacklink,
+} from "../api/activity";
 import { issuesApi } from "../api/issues";
 import { agentsApi } from "../api/agents";
 import { queryKeys } from "../lib/queryKeys";
@@ -422,6 +426,11 @@ export function LiveFeed({ companyId }: LiveFeedProps) {
   void tick;
 
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [backlinkTarget, setBacklinkTarget] = useState<{
+    type: string;
+    key: string;
+    label: string;
+  } | null>(null);
 
   return (
     <div className="flex h-full max-h-full flex-col overflow-hidden rounded-xl border border-border bg-card/30">
@@ -469,10 +478,144 @@ export function LiveFeed({ companyId }: LiveFeedProps) {
               onToggle={() =>
                 setExpanded((prev) => (prev === item.key ? null : item.key))
               }
+              onOpenBacklinks={(target) => setBacklinkTarget(target)}
             />
           ))}
         </ul>
       )}
+
+      {backlinkTarget && (
+        <BacklinksDrawer
+          companyId={companyId}
+          target={backlinkTarget}
+          onClose={() => setBacklinkTarget(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// Pills + drawer ----------------------------------------------------------
+
+interface BacklinkTarget {
+  type: string;
+  key: string;
+  label: string;
+}
+
+function EntityPills({
+  activityId,
+  onOpen,
+}: {
+  activityId: string;
+  onOpen: (target: BacklinkTarget) => void;
+}) {
+  const { data } = useQuery<ActivityEntity[]>({
+    queryKey: ["activity-entities", activityId],
+    queryFn: () => activityApi.entitiesForActivity(activityId),
+    staleTime: 60_000,
+  });
+  const entities = data ?? [];
+  if (entities.length === 0) return null;
+  return (
+    <div className="mt-2 flex flex-wrap gap-1.5">
+      {entities.map((e) => {
+        const label = e.entityLabel ?? e.entityKey;
+        const display =
+          label.length > 32 ? `${label.slice(0, 30)}…` : label;
+        return (
+          <button
+            key={e.id}
+            type="button"
+            onClick={(ev) => {
+              ev.stopPropagation();
+              onOpen({ type: e.entityType, key: e.entityKey, label });
+            }}
+            className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-background/70 px-2 py-0.5 text-[10px] text-muted-foreground hover:border-cyan-500/60 hover:text-foreground"
+            title={`${e.entityType}: ${label}`}
+          >
+            <span className="font-mono text-[9px] uppercase tracking-wide text-muted-foreground/70">
+              {e.entityType}
+            </span>
+            <span className="truncate max-w-[160px]">{display}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function BacklinksDrawer({
+  companyId,
+  target,
+  onClose,
+}: {
+  companyId: string;
+  target: BacklinkTarget;
+  onClose: () => void;
+}) {
+  const { data, isLoading } = useQuery<ActivityEntityBacklink[]>({
+    queryKey: ["activity-entities", "backlinks", companyId, target.type, target.key],
+    queryFn: () => activityApi.backlinks(companyId, target.type, target.key, 100),
+  });
+  const rows = data ?? [];
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-stretch justify-end bg-black/40"
+      onClick={onClose}
+    >
+      <div
+        className="flex h-full w-full max-w-md flex-col border-l border-border bg-background shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border/60 px-4 py-3">
+          <div className="min-w-0">
+            <div className="text-[10px] font-mono uppercase tracking-wide text-muted-foreground">
+              {target.type}
+            </div>
+            <div className="truncate text-sm font-semibold text-foreground">
+              {target.label}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+          >
+            <XCircle className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {isLoading ? (
+            <div className="px-4 py-6 text-center text-xs text-muted-foreground">
+              Loading…
+            </div>
+          ) : rows.length === 0 ? (
+            <div className="px-4 py-6 text-center text-xs text-muted-foreground">
+              No other activity touches this entity yet.
+            </div>
+          ) : (
+            <ul className="divide-y divide-border/60">
+              {rows.map((row) => (
+                <li key={row.activityId} className="px-4 py-2.5 text-sm">
+                  <div className="font-mono text-[10px] text-muted-foreground">
+                    {row.activity.action}
+                  </div>
+                  <div className="text-foreground">
+                    {row.activity.entityType}
+                    {row.activity.entityId
+                      ? ` · ${row.activity.entityId.slice(0, 12)}`
+                      : ""}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground">
+                    {timeAgo(row.activity.createdAt)}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -484,9 +627,10 @@ interface FeedRowProps {
   transcriptByRun: ReturnType<typeof useLiveRunTranscripts>["transcriptByRun"];
   isExpanded: boolean;
   onToggle: () => void;
+  onOpenBacklinks: (target: BacklinkTarget) => void;
 }
 
-function FeedRow({ item, issueById, agentById, transcriptByRun, isExpanded, onToggle }: FeedRowProps) {
+function FeedRow({ item, issueById, agentById, transcriptByRun, isExpanded, onToggle, onOpenBacklinks }: FeedRowProps) {
   if (item.kind === "run" && item.run) {
     return (
       <RunFeedRow
@@ -505,6 +649,7 @@ function FeedRow({ item, issueById, agentById, transcriptByRun, isExpanded, onTo
         issueById={issueById}
         isExpanded={isExpanded}
         onToggle={onToggle}
+        onOpenBacklinks={onOpenBacklinks}
       />
     );
   }
@@ -616,12 +761,14 @@ function ActivityFeedRow({
   issueById,
   isExpanded,
   onToggle,
+  onOpenBacklinks,
 }: {
   event: ActivityEvent;
   agentById: Map<string, Agent>;
   issueById: Map<string, Issue>;
   isExpanded: boolean;
   onToggle: () => void;
+  onOpenBacklinks: (target: BacklinkTarget) => void;
 }) {
   const verb = activityVerb(event.action);
   const actor =
@@ -699,6 +846,7 @@ function ActivityFeedRow({
               {JSON.stringify(event.details, null, 2)}
             </pre>
           )}
+          <EntityPills activityId={event.id} onOpen={onOpenBacklinks} />
         </div>
       )}
     </li>

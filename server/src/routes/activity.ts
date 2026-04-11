@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { Db } from "@paperclipai/db";
 import { validate } from "../middleware/validate.js";
 import { activityService } from "../services/activity.js";
+import { activityEntitiesService } from "../services/activity-entities.js";
 import { assertBoard, assertCompanyAccess } from "./authz.js";
 import { issueService } from "../services/index.js";
 import { sanitizeRecord } from "../redaction.js";
@@ -20,6 +21,7 @@ const createActivitySchema = z.object({
 export function activityRoutes(db: Db) {
   const router = Router();
   const svc = activityService(db);
+  const entitiesSvc = activityEntitiesService(db);
   const issueSvc = issueService(db);
 
   async function resolveIssueByRef(rawId: string) {
@@ -76,6 +78,42 @@ export function activityRoutes(db: Db) {
     assertCompanyAccess(req, issue.companyId);
     const result = await svc.runsForIssue(issue.companyId, issue.id);
     res.json(result);
+  });
+
+  // Entity pills for a single activity row.
+  router.get("/activity/:activityId/entities", async (req, res) => {
+    const activityId = req.params.activityId as string;
+    const rows = await entitiesSvc.forActivity(activityId);
+    res.json(rows);
+  });
+
+  // Backlinks: every activity row tagged with a given entity. Powers the
+  // "everything we know about X" drawer.
+  router.get(
+    "/companies/:companyId/activity-entities/:type/:key",
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      assertCompanyAccess(req, companyId);
+      const type = req.params.type as string;
+      const key = req.params.key as string;
+      const limit = req.query.limit
+        ? Math.min(500, Math.max(1, Number(req.query.limit)))
+        : 100;
+      const rows = await entitiesSvc.backlinks({ companyId, type, key, limit });
+      res.json(rows);
+    },
+  );
+
+  // Top entities for autocomplete / dashboards.
+  router.get("/companies/:companyId/activity-entities", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const type = (req.query.type as string | undefined) || undefined;
+    const limit = req.query.limit
+      ? Math.min(200, Math.max(1, Number(req.query.limit)))
+      : 50;
+    const rows = await entitiesSvc.topEntities(companyId, type, limit);
+    res.json(rows);
   });
 
   router.get("/heartbeat-runs/:runId/issues", async (req, res) => {

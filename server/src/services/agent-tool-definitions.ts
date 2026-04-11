@@ -422,13 +422,34 @@ export const DELEGATION_TOOL_DEFINITIONS: DelegationToolDefinition[] = [
     function: {
       name: "paperclipUpdateWorkingMemory",
       description:
-        "Update your persistent working memory at the end of a heartbeat so your future self can resume. Pass only the fields you want to change; others are preserved. currentFocus should be one line; openThreads should list concurrent tasks with a nextStep and (optionally) blockedBy; recentDecisions should record commitments you made; expectedResponses are questions you asked and are waiting on. Keep it terse — this is a cursor, not a journal.",
+        "Update your persistent working memory at the end of a heartbeat so your future self can resume. Pass only the fields you want to change; others are preserved. currentFocus is one line. compiled is your best-current-understanding paragraph (the ANSWER) — rewrite it whenever your mental model changes; the next heartbeat reads this first. appendTimeline appends evidence entries to the append-only log (the PROOF) — use it to record observations, decisions, results, blockers, and notes as they happen. openThreads list concurrent tasks with nextStep and (optionally) blockedBy; recentDecisions record commitments; expectedResponses are questions you asked and are waiting on. Keep currentFocus and compiled terse — this is a cursor, not a journal — and let timeline carry the raw evidence.",
       parameters: {
         type: "object",
         properties: {
           currentFocus: {
             type: "string",
             description: "One-line description of what you are actively working on right now.",
+          },
+          compiled: {
+            type: "string",
+            description: "Your best-current-understanding summary (≤ 4000 chars). Rewrite this whenever your mental model changes — it is what the next heartbeat reads first. Should be a terse paragraph: what you know, what you decided, what's next.",
+          },
+          appendTimeline: {
+            type: "array",
+            description: "Append evidence entries to your append-only timeline (capped at 100 most recent). Use this for raw observations, decisions, results, blockers, and notes as they happen — the timeline is your proof, while compiled is your answer.",
+            items: {
+              type: "object",
+              properties: {
+                at: { type: "string", description: "ISO timestamp; defaults to now if omitted." },
+                kind: {
+                  type: "string",
+                  enum: ["observation", "decision", "result", "blocker", "note"],
+                },
+                text: { type: "string", description: "Short evidence text (≤ 800 chars)." },
+                runId: { type: "string", description: "Optional heartbeat run id for traceability." },
+              },
+              required: ["kind", "text"],
+            },
           },
           openThreads: {
             type: "array",
@@ -1202,6 +1223,15 @@ export const DELEGATION_TOOL_DEFINITIONS: DelegationToolDefinition[] = [
         },
         required: ["topic", "tokens"],
       },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "paperclipRunRetro",
+      description:
+        "Run a weekly retrospective for the company. CEO/founder/chairman ONLY — returns 403 for other roles. Rolls up the last 7 days of playbook activity, refreshes stale lastInsight summaries, and returns a summary of the top patterns by run count and success rate. Use this to understand what's working, what's failing, and what to pivot. Auto-runs once a week, but you can trigger it manually any time.",
+      parameters: { type: "object", properties: {}, required: [] },
     },
   },
 ];

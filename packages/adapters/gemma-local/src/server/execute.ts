@@ -836,6 +836,9 @@ async function dispatchToolCall(
     case "paperclipRequestIntegration": {
       return httpJson("POST", `/api/agent-tools/request-integration`, args);
     }
+    case "paperclipRunRetro": {
+      return httpJson("POST", `/api/agent-tools/run-retro`, args);
+    }
     default:
       return { ok: false, result: `Unknown tool: ${name}` };
   }

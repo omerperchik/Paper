@@ -3473,9 +3473,15 @@ export function heartbeatService(db: Db) {
           issueTitle,
           purpose: programMdText.slice(0, 200),
         });
-        const hints = await pbService.findRelevant({
+        // Hybrid RRF recall: keyword (pg_trgm) + vector (pgvector) when
+        // embeddings are configured. The query is the human-readable
+        // task description; the pattern still gates the retro upsert.
+        const recallQuery = [issueTitle, programMdText.slice(0, 200), pattern]
+          .filter((s): s is string => Boolean(s))
+          .join(" — ");
+        const hints = await pbService.recallHybrid({
           agentId: agent.id,
-          pattern,
+          query: recallQuery,
           limit: 3,
         });
         if (hints.length > 0) {

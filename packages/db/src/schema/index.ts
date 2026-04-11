@@ -16,7 +16,7 @@ export { agentConfigRevisions } from "./agent_config_revisions.js";
 export { agentEvents } from "./agent_events.js";
 export { agentMemories } from "./agent_memories.js";
 export { agentWorkingMemory } from "./agent_working_memory.js";
-export type { OpenThread, RecentDecision, ExpectedResponse } from "./agent_working_memory.js";
+export type { OpenThread, RecentDecision, ExpectedResponse, MemoryTimelineEntry } from "./agent_working_memory.js";
 export { companyState } from "./company_state.js";
 export type {
   StrategyBlock,
@@ -71,6 +71,8 @@ export { financeEvents } from "./finance_events.js";
 export { approvals } from "./approvals.js";
 export { approvalComments } from "./approval_comments.js";
 export { activityLog } from "./activity_log.js";
+export { activityEntities } from "./activity_entities.js";
+export type { ActivityEntity, NewActivityEntity } from "./activity_entities.js";
 export { companySecrets } from "./company_secrets.js";
 export { companySecretVersions } from "./company_secret_versions.js";
 export { companySkills } from "./company_skills.js";

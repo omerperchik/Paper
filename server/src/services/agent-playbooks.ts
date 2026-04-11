@@ -9,9 +9,10 @@
 // v1 pattern-matching is keyword-based. Upgrade to embedding similarity when
 // the dataset is large enough to justify it.
 
-import { and, desc, eq, ilike, or } from "drizzle-orm";
+import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agentPlaybooks } from "@paperclipai/db";
+import { embed } from "./embeddings.js";
 
 export type PlaybookOutcome = "success" | "partial" | "failure";
 
@@ -89,6 +90,14 @@ export function agentPlaybookService(db: Db) {
         .limit(1)
         .then((r) => r[0] ?? null);
 
+      // Best-effort: embed pattern + approach + insight so hybrid recall
+      // can use the vector channel. Returns null if no embedding backend
+      // is configured — that's fine, RRF degrades to keyword-only.
+      const embeddingText = [input.pattern, input.approach, input.insight]
+        .filter(Boolean)
+        .join(" — ");
+      const embedding = await embed(embeddingText).catch(() => null);
+
       if (existing) {
         const totalBefore =
           existing.successCount + existing.failureCount + existing.partialCount;
@@ -116,6 +125,7 @@ export function agentPlaybookService(db: Db) {
             lastOutcome: input.outcome,
             lastUsedAt: now,
             updatedAt: now,
+            ...(embedding ? { embedding } : {}),
           })
           .where(eq(agentPlaybooks.id, existing.id))
           .returning()
@@ -140,6 +150,7 @@ export function agentPlaybookService(db: Db) {
           lastRunId: input.runId,
           lastOutcome: input.outcome,
           lastUsedAt: now,
+          ...(embedding ? { embedding } : {}),
         })
         .returning()
         .then((r) => r[0]);
@@ -199,6 +210,95 @@ export function agentPlaybookService(db: Db) {
       for (const r of exact) merged.set(r.id, r);
       for (const r of fuzzyRows) if (!merged.has(r.id)) merged.set(r.id, r);
       return Array.from(merged.values()).slice(0, limit).map(toRecord);
+    },
+
+    /**
+     * Hybrid recall: combines a keyword channel (pg_trgm similarity over
+     * pattern + approach + last_insight) with a vector channel (pgvector
+     * cosine distance over the embedding column) using Reciprocal Rank
+     * Fusion. RRF score = sum_channels 1/(K + rank_in_channel), K=60.
+     *
+     * Falls back to keyword-only when no embedding backend is configured
+     * (embed() returns null) — RRF still works with one channel.
+     *
+     * Use this for "find playbooks relevant to this task" — strictly better
+     * than findRelevant once embeddings are populated, and equivalent
+     * (modulo trigram vs ilike) when they aren't.
+     */
+    async recallHybrid(input: {
+      agentId: string;
+      query: string;
+      limit?: number;
+    }): Promise<PlaybookRecord[]> {
+      const limit = input.limit ?? 5;
+      const RRF_K = 60;
+      const POOL = limit * 4;
+
+      // Channel 1: keyword via pg_trgm similarity over the concatenation.
+      // Order by similarity desc; ties broken by recency.
+      const keywordRows = await db
+        .select({
+          id: agentPlaybooks.id,
+          row: agentPlaybooks,
+          sim: sql<number>`greatest(
+            similarity(${agentPlaybooks.pattern}, ${input.query}),
+            similarity(${agentPlaybooks.approach}, ${input.query}),
+            similarity(${agentPlaybooks.lastInsight}, ${input.query})
+          )`.as("sim"),
+        })
+        .from(agentPlaybooks)
+        .where(eq(agentPlaybooks.agentId, input.agentId))
+        .orderBy(
+          sql`greatest(
+            similarity(${agentPlaybooks.pattern}, ${input.query}),
+            similarity(${agentPlaybooks.approach}, ${input.query}),
+            similarity(${agentPlaybooks.lastInsight}, ${input.query})
+          ) desc`,
+          desc(agentPlaybooks.lastUsedAt),
+        )
+        .limit(POOL);
+
+      // Channel 2: vector cosine distance — only if embedding succeeds.
+      let vectorRows: typeof keywordRows = [];
+      const queryEmbedding = await embed(input.query).catch(() => null);
+      if (queryEmbedding) {
+        const literal = `[${queryEmbedding.join(",")}]`;
+        vectorRows = (await db
+          .select({
+            id: agentPlaybooks.id,
+            row: agentPlaybooks,
+            sim: sql<number>`1 - (${agentPlaybooks.embedding} <=> ${literal}::vector)`.as("sim"),
+          })
+          .from(agentPlaybooks)
+          .where(
+            and(
+              eq(agentPlaybooks.agentId, input.agentId),
+              sql`${agentPlaybooks.embedding} is not null`,
+            ),
+          )
+          .orderBy(sql`${agentPlaybooks.embedding} <=> ${literal}::vector`)
+          .limit(POOL)) as typeof keywordRows;
+      }
+
+      // Reciprocal Rank Fusion across both channels.
+      const scores = new Map<string, { score: number; row: typeof keywordRows[number]["row"] }>();
+      const accumulate = (rows: typeof keywordRows) => {
+        rows.forEach((r, idx) => {
+          const rank = idx + 1;
+          const inc = 1 / (RRF_K + rank);
+          const prev = scores.get(r.id);
+          if (prev) prev.score += inc;
+          else scores.set(r.id, { score: inc, row: r.row });
+        });
+      };
+      accumulate(keywordRows);
+      accumulate(vectorRows);
+
+      const ranked = Array.from(scores.values())
+        .sort((a, b) => b.score - a.score)
+        .slice(0, limit)
+        .map((s) => toRecord(s.row));
+      return ranked;
     },
   };
 }

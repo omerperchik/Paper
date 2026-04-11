@@ -1,6 +1,20 @@
-import { pgTable, uuid, text, timestamp, integer, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, integer, index, uniqueIndex, customType } from "drizzle-orm/pg-core";
 import { companies } from "./companies.js";
 import { agents } from "./agents.js";
+
+/**
+ * pgvector custom type — Drizzle does not ship a vector type. We treat the
+ * column as `number[] | null` in TS land and serialize to the pgvector
+ * `[1.0,2.0,...]` literal on write. Read paths cast through unknown.
+ */
+const vector1536 = customType<{ data: number[]; driverData: string }>({
+  dataType() {
+    return "vector(1536)";
+  },
+  toDriver(value: number[]): string {
+    return `[${value.join(",")}]`;
+  },
+});
 
 /**
  * agent_playbooks — per-agent learned-from-experience index.
@@ -40,6 +54,13 @@ export const agentPlaybooks = pgTable(
     lastUsedAt: timestamp("last_used_at", { withTimezone: true }).notNull().defaultNow(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    /**
+     * Optional embedding of `pattern + " " + approach + " " + lastInsight`.
+     * Populated lazily by the embedder if one is configured. Hybrid recall
+     * (RRF) combines this with keyword similarity; absent embeddings just
+     * mean the keyword channel does all the work.
+     */
+    embedding: vector1536("embedding"),
   },
   (table) => ({
     agentPatternUniq: uniqueIndex("agent_playbooks_agent_pattern_uniq").on(

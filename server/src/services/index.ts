@@ -20,6 +20,7 @@ export { agentProgramRevisionService } from "./agent-program-revisions.js";
 export { costService } from "./costs.js";
 export { financeService } from "./finance.js";
 export { heartbeatService } from "./heartbeat.js";
+export { retroService, type RetroSummary } from "./retro.js";
 export { dashboardService } from "./dashboard.js";
 export { sidebarBadgeService } from "./sidebar-badges.js";
 export { accessService } from "./access.js";

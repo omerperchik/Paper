@@ -32,6 +32,7 @@ import {
   feedbackService,
   heartbeatService,
   reconcilePersistedRuntimeServicesOnStartup,
+  retroService,
   routineService,
 } from "./services/index.js";
 import { createFeedbackTraceShareClientFromConfig } from "./services/feedback-share-client.js";
@@ -735,7 +736,31 @@ export async function startServer(): Promise<StartedServer> {
       void runScheduledBackup();
     }, backupIntervalMs);
   }
-  
+
+  // Weekly retro: rolls up the last 7 days of playbook activity per company,
+  // rewrites stale lastInsight summaries with heuristics, and emits a
+  // routine.triggered wake event to the CEO so they get a heartbeat with
+  // the retro summary in context. Idempotent — safe to run repeatedly.
+  // First run is scheduled 60s after startup so the system warms up first;
+  // subsequent runs every 7 days. The dedupe key in retroService prevents
+  // double-emissions if the interval drifts.
+  {
+    const retro = retroService(db as any);
+    const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+    const triggerRetroSweep = () => {
+      void retro
+        .runRetroForAll()
+        .then((result) => {
+          logger.info({ ...result, service: "retro" }, "weekly retro sweep complete");
+        })
+        .catch((err) => {
+          logger.warn({ err, service: "retro" }, "weekly retro sweep failed");
+        });
+    };
+    setTimeout(triggerRetroSweep, 60_000);
+    setInterval(triggerRetroSweep, ONE_WEEK_MS);
+  }
+
   // Wait for external adapters to finish loading before accepting requests.
   // Without this, adapter type validation (assertKnownAdapterType) would
   // reject valid external adapter types during the startup loading window.

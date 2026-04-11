@@ -21,6 +21,24 @@ export interface IssueForRun {
   priority: string;
 }
 
+export interface ActivityEntity {
+  id: string;
+  companyId: string;
+  activityId: string;
+  entityType: string;
+  entityKey: string;
+  entityLabel: string | null;
+  createdAt: string;
+}
+
+export interface ActivityEntityBacklink {
+  activityId: string;
+  entityType: string;
+  entityKey: string;
+  entityLabel: string | null;
+  activity: ActivityEvent;
+}
+
 export const activityApi = {
   list: (companyId: string, filters?: { entityType?: string; entityId?: string; agentId?: string }) => {
     const params = new URLSearchParams();
@@ -33,4 +51,13 @@ export const activityApi = {
   forIssue: (issueId: string) => api.get<ActivityEvent[]>(`/issues/${issueId}/activity`),
   runsForIssue: (issueId: string) => api.get<RunForIssue[]>(`/issues/${issueId}/runs`),
   issuesForRun: (runId: string) => api.get<IssueForRun[]>(`/heartbeat-runs/${runId}/issues`),
+  entitiesForActivity: (activityId: string) =>
+    api.get<ActivityEntity[]>(`/activity/${activityId}/entities`),
+  backlinks: (companyId: string, type: string, key: string, limit = 100) =>
+    api.get<ActivityEntityBacklink[]>(
+      `/companies/${companyId}/activity-entities/${encodeURIComponent(type)}/${encodeURIComponent(key)}?limit=${limit}`,
+    ),
 };
+
+// Re-export ActivityEvent so consumers can import everything from one place.
+export type { ActivityEvent };

@@ -1,6 +1,7 @@
 import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { activityLog, heartbeatRuns, issues } from "@paperclipai/db";
+import { activityEntitiesService, extractEntities } from "./activity-entities.js";
 
 export interface ActivityFilters {
   companyId: string;
@@ -153,11 +154,36 @@ export function activityService(db: Db) {
       return [fromContext, ...fromActivity];
     },
 
-    create: (data: typeof activityLog.$inferInsert) =>
-      db
+    create: async (data: typeof activityLog.$inferInsert) => {
+      const row = await db
         .insert(activityLog)
         .values(data)
         .returning()
-        .then((rows) => rows[0]),
+        .then((rows) => rows[0]);
+      // Best-effort entity extraction → activity_entities. Never blocks the
+      // primary insert; if extraction or persistence fails the caller still
+      // gets the row back.
+      if (row) {
+        try {
+          const entities = extractEntities({
+            action: row.action,
+            entityType: row.entityType,
+            entityId: row.entityId,
+            agentId: row.agentId,
+            details: row.details as Record<string, unknown> | null,
+          });
+          if (entities.length > 0) {
+            await activityEntitiesService(db).record(
+              row.companyId,
+              row.id,
+              entities,
+            );
+          }
+        } catch {
+          // swallow
+        }
+      }
+      return row;
+    },
   };
 }
