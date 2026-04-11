@@ -4926,11 +4926,36 @@ export function heartbeatService(db: Db) {
     resumeQueuedRuns,
 
     tickTimers: async (now = new Date()) => {
-      const allAgents = await db.select().from(agents);
-      let checked = 0;
-      let enqueued = 0;
-      let skipped = 0;
+      // Per-tick batch cap. With N agents that share an interval, the
+      // historical scheduler would fire all N on the same tick, slamming the
+      // local model and exhausting the gemma-local queue. We now process at
+      // most MAX_PER_TICK eligible agents per tick — the rest spill to the
+      // next 30s tick. Override via HEARTBEAT_MAX_PER_TICK; default is 5,
+      // matching MAX_GLOBAL_CONCURRENT_RUNS so we can't enqueue more than
+      // the global concurrency cap can drain anyway.
+      const maxPerTick = Math.max(1, Number(process.env.HEARTBEAT_MAX_PER_TICK) || 5);
 
+      // Per-agent jitter: hash the agent id into a stable 0..1 fraction and
+      // use it to spread wakeups across the interval window. An agent is only
+      // eligible once `elapsedMs >= (1 + jitter*0.25) * intervalMs` — i.e.
+      // each agent is delayed by 0..25% of its own interval. This breaks the
+      // herd of agents that all started life at boot with synchronized
+      // lastHeartbeatAt without lengthening anyone's effective period by
+      // more than a quarter of one tick.
+      const hashFraction = (id: string): number => {
+        let h = 2166136261 >>> 0;
+        for (let i = 0; i < id.length; i++) {
+          h ^= id.charCodeAt(i);
+          h = Math.imul(h, 16777619) >>> 0;
+        }
+        return (h % 1000) / 1000;
+      };
+
+      const allAgents = await db.select().from(agents);
+      // Pre-filter to eligible agents and sort oldest-first so we don't
+      // starve any single agent under the per-tick cap.
+      const eligible: Array<{ agentId: string; lastSeen: number }> = [];
+      let checked = 0;
       for (const agent of allAgents) {
         if (agent.status === "paused" || agent.status === "terminated" || agent.status === "pending_approval") continue;
         const policy = parseHeartbeatPolicy(agent);
@@ -4939,9 +4964,22 @@ export function heartbeatService(db: Db) {
         checked += 1;
         const baseline = new Date(agent.lastHeartbeatAt ?? agent.createdAt).getTime();
         const elapsedMs = now.getTime() - baseline;
-        if (elapsedMs < policy.intervalSec * 1000) continue;
+        const jitterMs = policy.intervalSec * 1000 * 0.25 * hashFraction(agent.id);
+        if (elapsedMs < policy.intervalSec * 1000 + jitterMs) continue;
 
-        const run = await enqueueWakeup(agent.id, {
+        eligible.push({ agentId: agent.id, lastSeen: baseline });
+      }
+      eligible.sort((a, b) => a.lastSeen - b.lastSeen);
+
+      let enqueued = 0;
+      let skipped = 0;
+      let deferred = 0;
+      for (const item of eligible) {
+        if (enqueued >= maxPerTick) {
+          deferred = eligible.length - (enqueued + skipped);
+          break;
+        }
+        const run = await enqueueWakeup(item.agentId, {
           source: "timer",
           triggerDetail: "system",
           reason: "heartbeat_timer",
@@ -4957,7 +4995,7 @@ export function heartbeatService(db: Db) {
         else skipped += 1;
       }
 
-      return { checked, enqueued, skipped };
+      return { checked, enqueued, skipped, deferred };
     },
 
     // Keep-alive: guarantees at least one agent is always working. If nothing

@@ -12,13 +12,19 @@
 // ---------------------------------------------------------------------------
 
 export interface QueueConfig {
-  /** Max concurrent Ollama requests. Default: 2 */
+  /** Max concurrent Ollama requests. Default: 2 (env: OLLAMA_MAX_CONCURRENT) */
   maxConcurrentOllama: number;
-  /** Max requests waiting in queue before overflow to fallback. Default: 3 */
+  /** Max requests waiting in queue before overflow to fallback. Default: 16 (env: OLLAMA_MAX_QUEUE) */
   maxQueueDepth: number;
-  /** Max time (ms) a request will wait in queue before giving up. Default: 60000 */
+  /** Max time (ms) a request will wait in queue before giving up. Default: 180000 (env: OLLAMA_QUEUE_TIMEOUT_MS) */
   queueTimeoutMs: number;
 }
+
+// Read env-driven defaults once at module load. Per-agent adapter_config can
+// still override these via getOllamaQueue({...}).
+const ENV_MAX_CONCURRENT = Math.max(1, Number(process.env.OLLAMA_MAX_CONCURRENT) || 2);
+const ENV_MAX_QUEUE = Math.max(1, Number(process.env.OLLAMA_MAX_QUEUE) || 16);
+const ENV_QUEUE_TIMEOUT_MS = Math.max(5_000, Number(process.env.OLLAMA_QUEUE_TIMEOUT_MS) || 180_000);
 
 export interface QueueStats {
   activeOllamaRequests: number;
@@ -42,9 +48,9 @@ class OllamaQueue {
 
   constructor(config?: Partial<QueueConfig>) {
     this.config = {
-      maxConcurrentOllama: config?.maxConcurrentOllama ?? 2,
-      maxQueueDepth: config?.maxQueueDepth ?? 3,
-      queueTimeoutMs: config?.queueTimeoutMs ?? 60_000,
+      maxConcurrentOllama: config?.maxConcurrentOllama ?? ENV_MAX_CONCURRENT,
+      maxQueueDepth: config?.maxQueueDepth ?? ENV_MAX_QUEUE,
+      queueTimeoutMs: config?.queueTimeoutMs ?? ENV_QUEUE_TIMEOUT_MS,
     };
   }
 

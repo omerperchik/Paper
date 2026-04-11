@@ -35,6 +35,15 @@ function asNumber(value: unknown, fallback: number): number {
   return fallback;
 }
 
+function asOptionalNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.length > 0) {
+    const n = Number(value);
+    if (Number.isFinite(n)) return n;
+  }
+  return undefined;
+}
+
 function asBool(value: unknown, fallback: boolean): boolean {
   if (typeof value === "boolean") return value;
   if (value === "true") return true;
@@ -1098,13 +1107,22 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     systemPrompt = systemPrompt ? `${systemPrompt}\n${autonomyDirective}` : autonomyDirective;
   }
 
-  // Queue configuration (can be overridden per-agent in adapter_config)
-  const maxConcurrentOllama = asNumber(config.maxConcurrentOllama, 2);
-  const maxQueueDepth = asNumber(config.maxQueueDepth, 3);
-  const queueTimeoutMs = asNumber(config.queueTimeoutMs, 60_000);
+  // Queue configuration. Per-agent adapter_config overrides win; otherwise we
+  // pass undefined and let ollama-queue.ts apply its env-driven defaults
+  // (OLLAMA_MAX_CONCURRENT, OLLAMA_MAX_QUEUE, OLLAMA_QUEUE_TIMEOUT_MS).
+  // Defaults were bumped from 2/3/60s → 2/16/180s after observing that
+  // a single 8B local model behind 21 heartbeating agents was overflowing
+  // the queue and falling through to a paid (and out-of-balance) fallback.
+  const maxConcurrentOllama = asOptionalNumber(config.maxConcurrentOllama);
+  const maxQueueDepth = asOptionalNumber(config.maxQueueDepth);
+  const queueTimeoutMs = asOptionalNumber(config.queueTimeoutMs);
 
   // Get or update the shared Ollama queue
-  const ollamaQueue = getOllamaQueue({ maxConcurrentOllama, maxQueueDepth, queueTimeoutMs });
+  const ollamaQueue = getOllamaQueue({
+    ...(maxConcurrentOllama !== undefined ? { maxConcurrentOllama } : {}),
+    ...(maxQueueDepth !== undefined ? { maxQueueDepth } : {}),
+    ...(queueTimeoutMs !== undefined ? { queueTimeoutMs } : {}),
+  });
 
   // Build prompt from template. Default differs based on whether this is an
   // autonomous heartbeat run (no assigned issue) or a task-driven run.
@@ -1160,9 +1178,10 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   if (slotResult === "timeout") {
     // Waited too long in queue — go to MiniMax
+    const effectiveTimeoutMs = queueTimeoutMs ?? 180_000;
     await onLog(
       "stderr",
-      `[gemma-local] Ollama queue wait timed out after ${Math.round(queueTimeoutMs / 1000)}s. Routing to MiniMax.\n`,
+      `[gemma-local] Ollama queue wait timed out after ${Math.round(effectiveTimeoutMs / 1000)}s. Routing to MiniMax.\n`,
     );
     return await executeFallback(fallbackUrl, fallbackModel, fallbackApiKey, messages, tools, fallbackTimeoutSec, numPredict, onLog, context);
   }
